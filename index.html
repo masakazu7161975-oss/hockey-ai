@@ -557,7 +557,9 @@ views.home = async () => {
         h("button", { class: "btn", onclick: () => matchDialog(m) }, "編集"),
         h("button", { class: "btn danger ghost", onclick: async () => {
           if (!(await confirmDlg("試合を削除", `${mLabel(m)} と、そのタグ ${n} 件を削除します。元に戻せません。`))) return;
-          await DB.bulk([["matches", "delete", m.id], ["videos", "delete", m.id], ...S.tags.filter(t => t.matchId === m.id).map(t => ["tags", "delete", t.id])]);
+          const metas = await DB.all("meta");
+          await DB.bulk([["matches", "delete", m.id], ["videos", "delete", m.id], ...S.tags.filter(t => t.matchId === m.id).map(t => ["tags", "delete", t.id]),
+            ...metas.filter(r => r.id.startsWith(`rec:${m.id}:`) || r.id.startsWith(`recvid:${m.id}:`) || r.id === `live:${m.id}` || r.id === `video:${m.id}`).map(r => ["meta", "delete", r.id])]);
           dropVideoURL(m.id); await reload(); toast("試合を削除しました"); render();
         } }, "削除")));
   })));
@@ -792,7 +794,9 @@ views.tag = async () => {
       m.videoName ? h("div", { class: "small" }, `前回の動画: ${m.videoName}`) : null,
       fileButton("動画を選ぶ（写真／ファイル）", "image/*,video/*", "", f => useVideoFile(m, f), "t_video",
         () => { if (lastDiag() !== "open") diag("open", { matchId: m.id }); startWait(); }, () => { stopWait(); if (lastDiag() !== "empty") diag("cancel"); state.pickFail = true; render(); }),
-      h("div", { class: "small", style: "opacity:.85;max-width:52ch" }, "「写真ライブラリ」から試合動画を選んでください。長い動画は準備に少し時間がかかります。動画は iPad 内で再生するだけで、どこにも送信されません。")));
+      h("div", { class: "small", style: "opacity:.85;max-width:52ch" }, "「写真ライブラリ」から試合動画を選んでください。長い動画は準備に少し時間がかかります。動画は iPad 内で再生するだけで、どこにも送信されません。"),
+      h("div", { id: "t_recs" })));
+    if (typeof recordingsList === "function") recordingsList(m, q => openRecording(m, q)).then(el => { if (el) document.getElementById("t_recs")?.replaceWith(Object.assign(el, { className: "stack recs" })); });
   } else {
     video = h("video", { src: url, controls: true, playsinline: true, preload: "metadata" });
     diag("player");
@@ -818,7 +822,8 @@ views.tag = async () => {
   /* --- タイムライン */
   const tl = h("div", { class: "timeline", title: "タップでその位置へ。マーカー＝タグ" });
   left.append(tl);
-  const matchTags = () => S.tags.filter(t => t.matchId === m.id && t.status !== "rejected").sort((a, b) => a.time - b.time);
+  // ライブ録画（Q ごとの動画）を見ているときは、その Q のタグだけを表示
+  const matchTags = () => S.tags.filter(t => t.matchId === m.id && t.status !== "rejected" && (!tagCtx.onlyQ || t.quarter === tagCtx.onlyQ)).sort((a, b) => a.time - b.time);
   function drawTL() {
     tl.replaceChildren();
     const d = video?.duration || m.duration;
@@ -876,7 +881,7 @@ views.tag = async () => {
     side.replaceChildren(
       h("div", { class: "panel stack" },
         h("span", { class: "label" }, "クォーター"),
-        h("div", { class: "seg" }, [1, 2, 3, 4].map(q => h("button", { class: tagCtx.quarter === q ? "on" : "", onclick: () => { tagCtx.quarter = q; drawSide(); } }, "Q" + q))),
+        h("div", { class: "seg" }, [1, 2, 3, 4].map(q => h("button", { class: tagCtx.quarter === q ? "on" : "", disabled: !!tagCtx.onlyQ && tagCtx.onlyQ !== q, onclick: () => { tagCtx.quarter = q; drawSide(); } }, "Q" + q))),
         h("span", { class: "label" }, "ボール保持（入れ替わったらタップ）"),
         h("div", { class: "seg" },
           h("button", { class: holder === m.teamId ? "on" : "", disabled: !video, onclick: () => setHolder(m.teamId, ownName) }, ownName),
@@ -911,7 +916,12 @@ views.tag = async () => {
         h("label", { class: "field" }, "タグへ移動するとき何秒前から再生するか",
           select("t_lead", [[0, "0秒"], [2, "2秒"], [3, "3秒"], [5, "5秒"], [8, "8秒"], [10, "10秒"]], state.lead)),
         h("label", { class: "check" }, h("input", { type: "checkbox", id: "t_auto", checked: state.autoplay }), "移動後に自動再生"),
+        tagCtx.onlyQ ? h("div", { class: "pill ai" }, `ライブ録画 Q${tagCtx.onlyQ} を表示中（Q${tagCtx.onlyQ} のタグだけ表示）`) : null,
         video ? fileButton("別の動画を選ぶ", "image/*,video/*", "sm", f => useVideoFile(m, f), "t_video2") : null,
+        video && typeof recordingsList === "function" ? h("button", { class: "btn sm", onclick: async () => {
+          const el = await recordingsList(m, q => { document.getElementById("dlg").close(); openRecording(m, q); });
+          dialog("ライブ録画を開く", el || h("p", null, "この試合のライブ録画はありません。"), [{ label: "閉じる", value: true }]);
+        } }, "ライブ録画を開く") : null,
         video ? h("button", { class: "btn sm danger", onclick: async () => {
           if (!(await confirmDlg("動画を外す", "この試合から動画を外します。付けたタグは消えません。写真アプリの動画も消えません。", "外す"))) return;
           dropVideoURL(m.id); pendingFiles.delete(m.id);
@@ -1082,8 +1092,21 @@ function startWait() {
   }, 1000);
 }
 function stopWait() { clearInterval(waitTimer); waitTimer = null; document.getElementById("waitbox")?.remove(); }
+async function openRecording(m, q) {
+  toast(`Q${q} の録画を読み込んでいます…`);
+  const blob = await loadRecording(m.id, q);
+  if (!blob.size) return toast("録画が見つかりません");
+  dropVideoURL(m.id);
+  videoURLs.set(m.id, URL.createObjectURL(blob));
+  pendingFiles.delete(m.id);
+  if (!tagCtx || tagCtx.matchId !== m.id) tagCtx = { matchId: m.id, teamId: m.teamId, playerId: null, quarter: q, lastTagId: null, holder: undefined };
+  tagCtx.quarter = q; tagCtx.onlyQ = q;
+  await DB.put("matches", { ...m, videoName: `ライブ録画 Q${q}`, videoSize: blob.size, duration: null, updatedAt: now() });
+  await reload(); render();
+}
 async function useVideoFile(m, f) {
   stopWait();
+  if (tagCtx && tagCtx.matchId === m.id) tagCtx.onlyQ = null;
   {
     // accept を "image/*,video/*" にしているのは、iOS が写真ライブラリの動画を互換形式へ変換せず元のまま渡すようにするため。
     // そのため写真（画像）も選べてしまうので、ここで断る。

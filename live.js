@@ -197,11 +197,11 @@ function tickPossession() {
   const now = performance.now(), dt = (now - (q.lastTick || now)) / 1000; q.lastTick = now;
   if (q.holder && dt > 0 && dt < 5) q.poss[q.holder] += dt;
 }
-async function logTag(team, eventType, result, ai) {
+async function logTag(team, eventType, result, ai, o = {}) {
   const m = match(state.matchId); if (!m || !live.q) return;
   const teamId = team === "own" ? m.teamId : m.oppId;
-  await DB.put("tags", { matchId: m.id, time: Math.round(qTime() * 10) / 10, quarter: live.q.n, eventType, teamId, playerId: null, result: result || null,
-    memo: ai ? "ライブAI" : "ライブ", live: true, source: ai ? "ai" : "manual", status: ai ? "estimated" : "confirmed", createdAt: now(), updatedAt: now() });
+  await DB.put("tags", { matchId: m.id, time: Math.round((o.time ?? qTime()) * 10) / 10, quarter: o.quarter ?? live.q.n, eventType, teamId, playerId: null, result: result || null,
+    memo: o.memo || (ai ? "ライブAI" : "ライブ"), live: true, relayId: o.relayId || null, source: ai ? "ai" : "manual", status: ai ? "estimated" : "confirmed", createdAt: now(), updatedAt: now() });
   S.tags = await DB.all("tags");
 }
 async function saveQuarter() {
@@ -292,6 +292,16 @@ function relaySend(obj, minGap = 5) {
       await fetch(`${relayBase()}/${relay.topic}`, { method: "POST", body: b64(iv) + "." + b64(ct) });
     } catch { relay.state = "送信できません（電波を確認してください）"; }
   }, wait);
+}
+async function relayPost(obj) {
+  if (!relay.key) return false;
+  try {
+    const o = { ...obj, r: relay.role, ts: Date.now() };
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, relay.key, new TextEncoder().encode(JSON.stringify(o))));
+    await fetch(`${relayBase()}/${relay.topic}`, { method: "POST", body: b64(iv) + "." + b64(ct) });
+    return true;
+  } catch { relay.state = "送信できません（電波を確認してください）"; return false; }
 }
 const ago = t => t ? Math.round((Date.now() - t) / 1000) + "秒前" : "まだ受信なし";
 
@@ -402,6 +412,76 @@ function makeSetup({ video, stage, ov, say, ownName, oppName, title }) {
   return { steps, drawSteps, drawOverlay, grab, detectOnce };
 }
 
+
+/* ---------- ライブ解析中の録画 */
+const rec = { mr: null, mid: null, q: null, idx: 0, t0: 0, pending: Promise.resolve(), err: false };
+const recSupported = () => typeof MediaRecorder !== "undefined";
+function recMime() {
+  for (const t of ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"]) { try { if (MediaRecorder.isTypeSupported(t)) return t; } catch { } }
+  return "";
+}
+async function startRec(mid, q) {
+  if (!live.stream || !recSupported() || !prefs.get("lvRec", true)) return false;
+  await stopRec();
+  const metas = await DB.all("meta");
+  const old = metas.filter(r => r.id.startsWith(`rec:${mid}:${q}:`) || r.id === `recvid:${mid}:${q}`);
+  if (old.length) await DB.bulk(old.map(r => ["meta", "delete", r.id]));
+  const mime = recMime();
+  let mr;
+  try { mr = new MediaRecorder(live.stream, { mimeType: mime || undefined, videoBitsPerSecond: 2500000 }); }
+  catch { try { mr = new MediaRecorder(live.stream); } catch { return false; } }
+  Object.assign(rec, { mr, mid, q, idx: 0, t0: performance.now(), pending: Promise.resolve(), err: false });
+  mr.ondataavailable = e => {
+    if (!e.data || !e.data.size) return;
+    const i = rec.idx++, id = `rec:${mid}:${q}:${String(i).padStart(5, "0")}`;
+    rec.pending = rec.pending.then(() => DB.put("meta", { id, blob: e.data })).catch(() => { rec.err = true; });
+  };
+  await DB.put("meta", { id: `recvid:${mid}:${q}`, mid, q, mime: mr.mimeType || mime || "video/mp4", startedAt: now(), done: false });
+  mr.start(10000);
+  return true;
+}
+async function stopRec() {
+  if (!rec.mr) return;
+  const mr = rec.mr; rec.mr = null;
+  if (mr.state !== "inactive") { const done = new Promise(r => mr.addEventListener("stop", r, { once: true })); try { mr.stop(); } catch { } await Promise.race([done, new Promise(r => setTimeout(r, 4000))]); }
+  await rec.pending;
+  const meta = await DB.get("meta", `recvid:${rec.mid}:${rec.q}`);
+  if (meta) await DB.put("meta", { ...meta, done: true, chunks: rec.idx, seconds: Math.round((performance.now() - rec.t0) / 1000), error: rec.err });
+}
+async function listRecordings(mid) {
+  const metas = await DB.all("meta");
+  return metas.filter(r => r.id.startsWith(`recvid:${mid}:`)).map(r => {
+    const parts = metas.filter(c => c.id.startsWith(`rec:${mid}:${r.q}:`));
+    return { ...r, parts: parts.length, size: parts.reduce((a, c) => a + (c.blob?.size || 0), 0) };
+  }).filter(r => r.parts).sort((a, b) => a.q - b.q);
+}
+async function loadRecording(mid, q) {
+  const metas = await DB.all("meta");
+  const parts = metas.filter(r => r.id.startsWith(`rec:${mid}:${q}:`)).sort((a, b) => a.id.localeCompare(b.id));
+  const meta = metas.find(r => r.id === `recvid:${mid}:${q}`);
+  return new Blob(parts.map(r => r.blob), { type: (meta?.mime || "video/mp4").split(";")[0] });
+}
+async function deleteRecording(mid, q) {
+  const metas = await DB.all("meta");
+  await DB.bulk(metas.filter(r => r.id.startsWith(`rec:${mid}:${q}:`) || r.id === `recvid:${mid}:${q}`).map(r => ["meta", "delete", r.id]));
+}
+// 「解析」画面用: 録画の一覧（開く・削除）
+async function recordingsList(m, onOpen) {
+  const list = await listRecordings(m.id);
+  if (!list.length) return null;
+  const box = h("div", { class: "stack", style: "gap:6px" });
+  const draw = async () => {
+    const l = await listRecordings(m.id);
+    box.replaceChildren(h("div", { class: "small", style: "font-weight:700" }, "ライブ解析で録画した動画"),
+      ...l.map(r => h("div", { class: "row" },
+        h("button", { class: "btn sm primary", onclick: () => onOpen(r.q) }, `Q${r.q} の録画を開く`),
+        h("span", { class: "small" }, `${r.seconds ? fmt(r.seconds).slice(0, -2) : "録画途中で終了"} ・ ${r.size < 1e7 ? (r.size / 1e6).toFixed(1) : (r.size / 1e6).toFixed(0)} MB`),
+        h("button", { class: "btn sm ghost danger", onclick: async () => { if (!(await confirmDlg("録画を削除", `Q${r.q} の録画（${(r.size / 1e6).toFixed(0)} MB）を削除します。タグは残ります。`))) return; await deleteRecording(m.id, r.q); toast("録画を削除しました"); draw(); } }, "削除"))));
+  };
+  await draw();
+  return box;
+}
+
 /* ---------- 画面 */
 views.live = async () => {
   const cfg = liveCfg();
@@ -444,6 +524,13 @@ views.live = async () => {
     startRow.append(h("button", { class: "btn primary", onclick: () => startCamera(camSel.value) }, "カメラを開始"), camSel);
     try { (await navigator.mediaDevices?.enumerateDevices?.() || []).filter(d => d.kind === "videoinput").forEach((d, i) => camSel.append(h("option", { value: d.deviceId, selected: d.deviceId === prefs.get("lvCam", "") }, d.label || `カメラ ${i + 1}`))); } catch { }
     if (!camSel.options.length) camSel.append(h("option", { value: "" }, "背面カメラ"));
+    if (recSupported()) {
+      const recChk = h("input", { type: "checkbox", id: "lv_rec", checked: prefs.get("lvRec", true) });
+      recChk.addEventListener("change", () => prefs.set("lvRec", recChk.checked));
+      const recNote = h("span", { class: "small muted" }, "1Qあたり約280MB。試合後に「解析」で詳しく見られます。");
+      startRow.append(h("label", { class: "check" }, recChk, "解析中の映像を録画する"), recNote);
+      navigator.storage?.estimate?.().then(e => { if (e && e.quota) recNote.textContent += ` 空き目安 ${((e.quota - e.usage) / 1e9).toFixed(1)}GB`; }).catch(() => { });
+    }
   } else {
     startRow.append(fileButton("動画を選ぶ", "image/*,video/*", "primary", f => { stopLive(); video.srcObject = null; video.src = URL.createObjectURL(f); video.loop = false; video.controls = true; video.play().catch(() => { }); say("動画を再生しています。下の手順で設定してください。"); }, "lv_file"));
   }
@@ -477,10 +564,10 @@ views.live = async () => {
         h("div", { class: "seg" }, [1, 2, 3, 4].map(n => h("button", { class: q.n === n ? "on" : "", disabled: q.running, onclick: () => { live.q = newQuarter(n); live.q.matchId = m.id; drawCtl(); drawBoard(); } }, "Q" + n))),
         h("span", { class: "timecode", id: "lv_clock" }, fmt(qTime()).slice(0, -2))),
       q.running
-        ? h("button", { class: "btn danger", onclick: async () => { tickPossession(); q.elapsed = qTime(); q.running = false; await saveQuarter(); drawCtl(); showSummary(m); } }, `Q${q.n} 終了 → 集計を表示`)
+        ? h("button", { class: "btn danger", onclick: async () => { tickPossession(); q.elapsed = qTime(); q.running = false; await saveQuarter(); drawCtl(); stopRec(); showSummary(m); } }, `Q${q.n} 終了 → 集計を表示`)
         : h("button", { class: "btn primary", onclick: () => {
           if (!live.sess) return toast("先にカメラ（または動画）を開始し、設定を済ませてください");
-          q.running = true; q.t0 = performance.now(); q.lastTick = q.t0; drawCtl(); runLoop();
+          q.running = true; q.t0 = performance.now(); q.lastTick = q.t0; drawCtl(); runLoop(); startRec(m.id, q.n);
         } }, `Q${q.n} 開始（AI 解析スタート）`),
       h("span", { class: "label" }, "ボール保持（入れ替わったらタップ）"),
       h("div", { class: "seg" },
@@ -502,9 +589,9 @@ views.live = async () => {
     if (n && n !== live.q.n) { live.q = newQuarter(n); live.q.matchId = m.id; }
     const q = live.q; if (q.running) return;
     if (!video.videoWidth) { say("ベンチから開始の合図が来ましたが、映像が開始されていません。「カメラを開始」を押してください。"); live.wantStart = true; drawCtl(); return; }
-    q.running = true; q.t0 = performance.now(); q.lastTick = q.t0; live.wantStart = false; drawCtl(); runLoop();
+    q.running = true; q.t0 = performance.now(); q.lastTick = q.t0; live.wantStart = false; drawCtl(); runLoop(); startRec(m.id, q.n);
   }
-  async function stopQ() { const q = live.q; live.wantStart = false; if (!q.running) return drawCtl(); q.elapsed = qTime(); q.running = false; await saveQuarter(); sendAI(true); drawCtl(); }
+  async function stopQ() { const q = live.q; live.wantStart = false; if (!q.running) return drawCtl(); q.elapsed = qTime(); q.running = false; await saveQuarter(); sendAI(true); drawCtl(); stopRec(); }
   function sendAI(now) {
     if (role !== "camera") return;
     const q = live.q;
@@ -529,7 +616,13 @@ views.live = async () => {
           h("button", { class: "btn sm", disabled: !q.running, onclick: () => stopQ() }, "この端末で Q を終了"))));
   }
   const linkText = () => relay.key ? `連携: ${relay.state} ・ ベンチから受信: ${ago(relay.lastRecv)}` : "連携: 未接続";
-  const onCtl = obj => {
+  const onCtl = async obj => {
+    if (obj.ty === "tap") {  // ベンチでのタップを、この端末の録画と同じ時刻に記録
+      if (S.tags.some(t => t.relayId === obj.id)) return;
+      await logTag(obj.team, obj.ev, obj.res, false, { time: obj.t, quarter: obj.q, relayId: obj.id, memo: "ベンチ" });
+      if (obj.q === live.q.n && live.q.counts[obj.team][obj.key] != null) { live.q.counts[obj.team][obj.key]++; drawBoard(); }
+      return;
+    }
     if (obj.ty !== "ctl") return;
     if (obj.run) startQ(obj.q);
     else if (live.q.running && live.q.n === obj.q) stopQ();
@@ -572,7 +665,7 @@ views.live = async () => {
     }
   }
 
-  window.__viewCleanup = () => { live.loopId++; if (live.q) { tickPossession(); if (live.q.running) { live.q.elapsed = qTime(); live.q.running = false; } } };
+  window.__viewCleanup = () => { live.loopId++; if (live.q) { tickPossession(); if (live.q.running) { live.q.elapsed = qTime(); live.q.running = false; saveQuarter(); } } stopRec(); };
   drawSteps(); drawCtl(); drawBoard();
   if (live.stream || video.src) drawOverlay();
   if (role === "camera" && live.wantStart) video.addEventListener("loadedmetadata", () => { if (live.wantStart) startQ(); }, { once: true });
@@ -621,7 +714,10 @@ function benchView(wrap, m, ownName, oppName) {
   function drawCtl() {
     const q = live.q;
     const tbtn = (t, label, fn) => h("button", { class: "evbtn" + (t === "opp" ? " opp" : ""), disabled: !q.running, onclick: fn }, label);
-    const add = (t, key, ev, res) => async () => { q.counts[t][key]++; await logTag(t, ev, res, false); toast(`${t === "own" ? ownName : oppName}: ${key}`); drawCtl(); drawBoard(); };
+    const add = (t, key, ev, res) => async () => {
+      q.counts[t][key]++; await logTag(t, ev, res, false); toast(`${t === "own" ? ownName : oppName}: ${key}`); drawCtl(); drawBoard();
+      relayPost({ ty: "tap", id: crypto.getRandomValues(new Uint32Array(2)).join("-"), q: q.n, t: Math.round(qTime() * 10) / 10, team: t, key, ev, res });
+    };
     ctl.replaceChildren(
       h("div", { class: "row spread" },
         h("div", { class: "seg" }, [1, 2, 3, 4].map(n => h("button", { class: q.n === n ? "on" : "", disabled: q.running, onclick: () => { live.q = newQuarter(n); live.q.matchId = m.id; sendCtl(true); drawCtl(); drawBoard(); } }, "Q" + n))),
