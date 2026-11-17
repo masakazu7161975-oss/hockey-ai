@@ -689,6 +689,17 @@ views.tag = async () => {
   let m = match(state.matchId) || ms[0];
   if (m.id !== state.matchId) setMatch(m.id);
   if (!tagCtx || tagCtx.matchId !== m.id) tagCtx = { matchId: m.id, teamId: m.teamId, playerId: null, quarter: 1, lastTagId: null };
+  if (state.pickFail) {
+    state.pickFail = false;
+    wrap.append(h("div", { class: "notice stack" },
+      h("b", null, "動画を受け取れませんでした"),
+      h("span", { class: "small" }, "動画を選んだのにこの画面に戻った場合、iPad が動画をアプリに渡す前に失敗しています（自分でキャンセルした場合は気にしなくて大丈夫です）。長い動画ほど起きやすく、次の原因が考えられます。"),
+      h("ul", { class: "steps small" },
+        h("li", null, "iPad の空き容量が足りない：動画を渡すとき、iPad は動画と同じ大きさの一時コピーを作ります。「設定」→「一般」→「iPad ストレージ」で、動画の大きさ以上の空きがあるか確認してください。"),
+        h("li", null, "iCloud 写真の「ストレージを最適化」がオン：写真アプリでその動画を一度再生し、雲のマークや読み込み表示が消えてから選んでください。"),
+        h("li", null, "撮影サイズが大きい：iPhone の「設定」→「カメラ」→「ビデオ撮影」を 1080p/30fps にすると、4K の約3分の1の大きさになります。")),
+      h("div", null, h("button", { class: "btn sm", onclick: e => e.target.closest(".notice").remove() }, "閉じる"))));
+  }
   if (state.reloadWarn) {
     const pk = state.reloadWarn; const gb = pk.size ? (pk.size / 1e9).toFixed(1) + " GB" : "";
     state.reloadWarn = false;
@@ -732,8 +743,8 @@ views.tag = async () => {
     box.append(h("div", { class: "picker" },
       h("div", { style: "font-size:1.1rem;font-weight:700" }, "試合動画を選択してください"),
       m.videoName ? h("div", { class: "small" }, `前回の動画: ${m.videoName}`) : null,
-      fileButton("動画を選ぶ（写真／ファイル）", "video/*,.mp4,.mov,.m4v", "", f => useVideoFile(m, f), "t_video",
-        () => { if (lastDiag() !== "open") diag("open", { matchId: m.id }); }, () => diag("cancel")),
+      fileButton("動画を選ぶ（写真／ファイル）", "video/*", "", f => useVideoFile(m, f), "t_video",
+        () => { if (lastDiag() !== "open") diag("open", { matchId: m.id }); }, () => { if (lastDiag() !== "empty") diag("cancel"); state.pickFail = true; render(); }),
       h("div", { class: "small", style: "opacity:.85;max-width:52ch" }, "「写真ライブラリ」から試合動画を選んでください。長い動画は準備に少し時間がかかります。動画は iPad 内で再生するだけで、どこにも送信されません。")));
   } else {
     video = h("video", { src: url, controls: true, playsinline: true, preload: "metadata" });
@@ -832,7 +843,7 @@ views.tag = async () => {
         h("label", { class: "field" }, "タグへ移動するとき何秒前から再生するか",
           select("t_lead", [[0, "0秒"], [2, "2秒"], [3, "3秒"], [5, "5秒"], [8, "8秒"], [10, "10秒"]], state.lead)),
         h("label", { class: "check" }, h("input", { type: "checkbox", id: "t_auto", checked: state.autoplay }), "移動後に自動再生"),
-        video ? fileButton("別の動画を選ぶ", "video/*,.mp4,.mov,.m4v", "sm", f => useVideoFile(m, f), "t_video2") : null,
+        video ? fileButton("別の動画を選ぶ", "video/*", "sm", f => useVideoFile(m, f), "t_video2") : null,
         S.videoKeys.has(m.id)
           ? h("button", { class: "btn sm", onclick: async () => { await DB.del("videos", m.id); S.videoKeys.delete(m.id); toast("iPad内の動画を削除しました（タグは残ります）"); drawSide(); } }, "iPad内に保存した動画を削除")
           : video ? h("button", { class: "btn sm", onclick: () => storeVideo(m) }, "この動画を iPad 内に保存（次回選択不要）") : null),
@@ -923,7 +934,7 @@ views.tag = async () => {
       const code = video.error ? video.error.code : 0;
       vs.className = "vstatus err";
       vs.replaceChildren(h("b", null, "動画を再生できませんでした"), h("br"),
-        code === 4 ? "この形式に対応していないか、この画面（お試し版）では端末内の動画の再生が制限されています。GitHub Pages 版（ホーム画面に追加したアプリ）でお試しください。"
+        code === 4 ? "この形式の動画には対応していないか、端末内の動画の再生が制限されています。別の動画でお試しください。"
           : code === 3 ? "動画データの読み込み中に問題が起きました。別の動画でお試しください。"
           : "動画を読み込めませんでした。もう一度選び直してください。",
         h("span", { class: "small muted" }, `（エラーコード ${code}）`));
