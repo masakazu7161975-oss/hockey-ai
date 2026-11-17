@@ -180,6 +180,11 @@ dialog::backdrop { background: rgba(10, 20, 35, .45); }
 .dlg-h { padding: 16px 18px 0; }
 .dlg-b { padding: 14px 18px; overflow: auto; max-height: calc(100vh - 200px); }
 .dlg-f { padding: 12px 18px 16px; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; border-top: 1px solid var(--line); }
+.waitbox { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 40; width: min(460px, calc(100vw - 32px));
+  background: var(--surface); color: var(--fg); border: 2px solid var(--turf); border-radius: 14px; padding: 14px 16px; box-shadow: 0 10px 30px rgba(0,0,0,.25); display: flex; flex-direction: column; gap: 8px; }
+.waitbox .wt { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.05rem; }
+.spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--surface-2); border-top-color: var(--turf); animation: spin 1s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
 #toast { position: fixed; left: 50%; top: calc(60px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 50; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; width: max-content; max-width: calc(100vw - 32px); }
 #toast div { background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 22px; font-weight: 600; box-shadow: var(--shadow); }
 .notice { border: 1px solid color-mix(in srgb, var(--mark) 60%, var(--line)); background: color-mix(in srgb, var(--mark) 12%, var(--surface)); border-radius: var(--r); padding: 12px 14px; }
@@ -744,7 +749,7 @@ views.tag = async () => {
       h("div", { style: "font-size:1.1rem;font-weight:700" }, "試合動画を選択してください"),
       m.videoName ? h("div", { class: "small" }, `前回の動画: ${m.videoName}`) : null,
       fileButton("動画を選ぶ（写真／ファイル）", "image/*,video/*", "", f => useVideoFile(m, f), "t_video",
-        () => { if (lastDiag() !== "open") diag("open", { matchId: m.id }); }, () => { if (lastDiag() !== "empty") diag("cancel"); state.pickFail = true; render(); }),
+        () => { if (lastDiag() !== "open") diag("open", { matchId: m.id }); startWait(); }, () => { stopWait(); if (lastDiag() !== "empty") diag("cancel"); state.pickFail = true; render(); }),
       h("div", { class: "small", style: "opacity:.85;max-width:52ch" }, "「写真ライブラリ」から試合動画を選んでください。長い動画は準備に少し時間がかかります。動画は iPad 内で再生するだけで、どこにも送信されません。")));
   } else {
     video = h("video", { src: url, controls: true, playsinline: true, preload: "metadata" });
@@ -993,7 +998,25 @@ function diagText(entries) {
 }
 document.addEventListener("visibilitychange", () => { if (["open", "file", "player", "hidden", "visible"].includes(lastDiag())) diag(document.hidden ? "hidden" : "visible"); });
 window.addEventListener("pagehide", () => { if (["open", "file", "player", "hidden", "visible"].includes(lastDiag())) diag("pagehide"); });
+/* 動画を受け取るまでの待ち表示（iPad が元の動画をコピーしている間、画面が無反応に見えないように） */
+let waitTimer = null;
+function startWait() {
+  stopWait();
+  const t0 = Date.now();
+  const t = h("span", null, "動画を受け取っています… 0秒");
+  const note = h("div", { class: "small" }, "写真アプリで動画を選ぶと、iPad が動画をアプリに渡します。長い動画は1〜2分かかることがあります。");
+  document.body.append(h("div", { class: "waitbox", id: "waitbox", role: "status" },
+    h("div", { class: "wt" }, h("div", { class: "spin" }), t), note,
+    h("div", null, h("button", { class: "btn sm", onclick: () => { stopWait(); diag("cancel"); } }, "待つのをやめる"))));
+  waitTimer = setInterval(() => {
+    const sec = Math.round((Date.now() - t0) / 1000);
+    t.textContent = `動画を受け取っています… ${sec}秒`;
+    if (sec === 150) note.textContent = "2分以上たっても変わらない場合、iPad が動画を渡せていません。「待つのをやめる」を押し、「出力・バックアップ」画面の「動作の記録」を確認してください。";
+  }, 1000);
+}
+function stopWait() { clearInterval(waitTimer); waitTimer = null; document.getElementById("waitbox")?.remove(); }
 async function useVideoFile(m, f) {
+  stopWait();
   {
     // accept を "image/*,video/*" にしているのは、iOS が写真ライブラリの動画を互換形式へ変換せず元のまま渡すようにするため。
     // そのため写真（画像）も選べてしまうので、ここで断る。
