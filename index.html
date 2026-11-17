@@ -223,7 +223,7 @@ dialog::backdrop { background: rgba(10, 20, 35, .45); }
       <a href="#home" data-r="home">試合</a>
       <a href="#teams" data-r="teams">チーム・選手</a>
       <a href="#live" data-r="live">ライブ解析</a>
-      <a href="#tag" data-r="tag">タグ付け</a>
+      <a href="#tag" data-r="tag">解析</a>
       <a href="#stats" data-r="stats">集計</a>
       <a href="#export" data-r="export">出力・バックアップ</a>
       <a href="#events" data-r="events">イベント設定</a>
@@ -506,7 +506,7 @@ views.home = async () => {
       h("ol", { class: "steps" },
         h("li", null, "「チーム・選手」で自チームと対戦相手を登録（選手は氏名・背番号・ポジション）"),
         h("li", null, "この画面で試合（日付・対戦相手・カテゴリー）を登録"),
-        h("li", null, "「タグ付け」で動画を選び、選手を選んでイベントボタンをタップ"),
+        h("li", null, "「解析」で動画を選び、選手を選んでイベントボタンをタップ"),
         h("li", null, "「集計」で選手別・チーム別の数字を確認、「出力」で CSV 保存")),
       h("div", { class: "row" },
         h("a", { class: "btn primary", href: "#teams" }, "チームを登録する"),
@@ -525,7 +525,7 @@ views.home = async () => {
       m.competition || m.venue ? h("div", { class: "small muted" }, [m.competition, m.venue].filter(Boolean).join(" ・ ")) : null,
       h("div", { class: "row" }, h("span", { class: "pill" }, `タグ ${n}件`), vid),
       h("div", { class: "row" },
-        h("button", { class: "btn primary", onclick: () => { setMatch(m.id); location.hash = "#tag"; } }, "タグ付け"),
+        h("button", { class: "btn primary", onclick: () => { setMatch(m.id); location.hash = "#tag"; } }, "解析"),
         h("button", { class: "btn", onclick: () => matchDialog(m) }, "編集"),
         h("button", { class: "btn danger ghost", onclick: async () => {
           if (!(await confirmDlg("試合を削除", `${mLabel(m)} と、そのタグ ${n} 件を削除します。元に戻せません。`))) return;
@@ -676,7 +676,7 @@ function playerDialog(tm, p) {
     field("背番号", h("input", { type: "number", id: "p_no", value: p.number ?? "", inputmode: "numeric" })),
     field("氏名 *", h("input", { type: "text", id: "p_name", value: p.name })),
     field("ポジション", select("p_pos", POSITIONS.map(x => [x, x]), p.position)),
-    h("label", { class: "check" }, h("input", { type: "checkbox", id: "p_act", checked: p.active !== false }), "在籍中（タグ付け画面に表示）"),
+    h("label", { class: "check" }, h("input", { type: "checkbox", id: "p_act", checked: p.active !== false }), "在籍中（解析画面に表示）"),
     field("メモ", h("input", { type: "text", id: "p_memo", value: p.memo || "" })));
   dialog(`選手の編集（${tm.name}）`, body, [
     { label: "削除", cls: "danger", value: "del", check: async () => {
@@ -704,7 +704,7 @@ let tagCtx = null; // タグ付け画面の状態（チーム・選手・Q）
 views.tag = async () => {
   const wrap = h("div", { class: "stack" });
   const ms = [...S.matches].sort((a, b) => b.date.localeCompare(a.date));
-  if (!ms.length) { wrap.append(h("h2", null, "タグ付け"), h("div", { class: "panel empty" }, "試合が登録されていません。「試合」画面から登録してください。")); return wrap; }
+  if (!ms.length) { wrap.append(h("h2", null, "解析"), h("div", { class: "panel empty" }, "試合が登録されていません。「試合」画面から登録してください。")); return wrap; }
   let m = match(state.matchId) || ms[0];
   if (m.id !== state.matchId) setMatch(m.id);
   if (!tagCtx || tagCtx.matchId !== m.id) tagCtx = { matchId: m.id, teamId: m.teamId, playerId: null, quarter: 1, lastTagId: null };
@@ -987,7 +987,11 @@ document.addEventListener("keydown", e => { if (state.route === "tag" && keyHand
 function fileButton(label, accept, cls, onFile, id, onOpen, onCancel) {
   const inp = h("input", { type: "file", accept, class: "filehit", id, "aria-label": label });
   inp.addEventListener("change", () => { const f = inp.files && inp.files[0]; inp.value = ""; if (f) onFile(f); else { diag("empty"); if (onCancel) onCancel(); } });
-  if (onOpen) { inp.addEventListener("click", onOpen); inp.addEventListener("touchend", onOpen, { passive: true }); }
+  // onOpen は選択画面が開いた後に実行する（タップの最中に画面を変えると、iPad がタップを取り消して選択画面が開かない）
+  let pending = null;
+  if (onOpen) inp.addEventListener("click", () => { const tk = pending = { closed: false }; setTimeout(() => { if (!tk.closed) onOpen(); }, 600); });
+  const close = () => { if (pending) pending.closed = true; };
+  inp.addEventListener("change", close, true); inp.addEventListener("cancel", close, true);
   if (onCancel) inp.addEventListener("cancel", onCancel);
   return h("label", { class: "btn filebtn " + (cls || "") }, label, inp);
 }
@@ -1084,7 +1088,7 @@ views.stats = async () => {
   wrap.append(h("p", { class: "small muted", style: "margin:0" }, `対象 ${chosen.length} 試合 ・ タグ ${rows.length} 件 ・ 得点＝シュートと PS の結果が「ゴール」のもの`));
   const tabs = [["team", "チーム別"], ["match", "試合別"], ["player", "選手別"], ["quarter", "クォーター別"]];
   wrap.append(h("div", { class: "tabbar" }, tabs.map(([k, l]) => h("button", { class: state.statTab === k ? "on" : "", onclick: () => { state.statTab = k; render(); } }, l))));
-  if (!rows.length) { wrap.append(h("div", { class: "panel empty" }, "対象のタグがありません。")); return wrap; }
+  if (!rows.length) { wrap.append(h("div", { class: "panel empty" }, "対象のタグがありません。"), await deletePanel(ms)); return wrap; }
   let res;
   if (state.statTab === "team") res = teamSummary(rows);
   else if (state.statTab === "match") res = matchSummary(rows);
@@ -1098,8 +1102,50 @@ views.stats = async () => {
     res = playerSummary(statFilter.team ? rows.filter(r => r.teamName === statFilter.team) : rows);
   }
   wrap.append(table(res.cols, res.rows, { empty: "選手が設定されたタグがありません。" }));
+  wrap.append(await deletePanel(ms));
   return wrap;
 };
+
+/* 集計データの削除（タグ・ライブ解析の記録を、試合・クォーター単位で） */
+async function deletePanel(ms) {
+  const cur = state.delMatch && match(state.delMatch) ? state.delMatch : ms[0].id;
+  const qsel = state.delQ || "all";
+  const inRange = t => t.matchId === cur && (qsel === "all" || t.quarter === +qsel);
+  const tags = S.tags.filter(inRange), liveTags = tags.filter(t => t.live);
+  const rec = await DB.get("meta", "live:" + cur).catch(() => null);
+  const liveQs = rec ? Object.keys(rec.quarters || {}).filter(q => qsel === "all" || q === qsel) : [];
+  const range = qsel === "all" ? "すべてのクォーター" : "Q" + qsel;
+  const mName = mLabel(match(cur));
+  async function removeLive() {
+    if (!rec) return;
+    if (qsel === "all") await DB.del("meta", rec.id);
+    else { delete rec.quarters[qsel]; await DB.put("meta", rec); }
+    if (typeof live !== "undefined" && live.q && live.q.matchId === cur && (qsel === "all" || live.q.n === +qsel) && !live.q.running) live.q = null;
+  }
+  const panel = h("details", { class: "panel" }, h("summary", { class: "lv-sum" }, "集計データの削除"),
+    h("div", { class: "stack", style: "margin-top:10px" },
+      h("p", { class: "small muted", style: "margin:0" }, "集計はタグとライブ解析の記録から計算しています。削除すると元に戻せないので、先に「出力・バックアップ」でバックアップを保存してください。試合そのものと動画は消えません。"),
+      h("div", { class: "row" },
+        h("label", { class: "field grow" }, "試合", select("d_match", ms.map(m => [m.id, mLabel(m)]), cur)),
+        h("label", { class: "field" }, "範囲", select("d_q", [["all", "すべてのQ"], ["1", "Q1"], ["2", "Q2"], ["3", "Q3"], ["4", "Q4"]], qsel))),
+      h("p", { class: "small", style: "margin:0" }, `対象: タグ ${tags.length} 件（うちライブ解析 ${liveTags.length} 件）・ ライブ解析の集計 ${liveQs.length} クォーター分`),
+      h("div", { class: "row" },
+        h("button", { class: "btn danger", disabled: !liveTags.length && !liveQs.length, onclick: async () => {
+          if (!(await confirmDlg("ライブ解析の記録を削除", `${mName} の ${range} について、ライブ解析の記録（タグ ${liveTags.length} 件と Q間の集計）を削除します。動画で付けたタグは残ります。`))) return;
+          await DB.bulk(liveTags.map(t => ["tags", "delete", t.id])); await removeLive();
+          await reload(); toast("ライブ解析の記録を削除しました"); render();
+        } }, "ライブ解析の記録を削除"),
+        h("button", { class: "btn danger", disabled: !tags.length && !liveQs.length, onclick: async () => {
+          if (!(await confirmDlg("タグをすべて削除", `${mName} の ${range} のタグ ${tags.length} 件と、ライブ解析の集計を削除します。`, "すべて削除"))) return;
+          await DB.bulk(tags.map(t => ["tags", "delete", t.id])); await removeLive();
+          await reload(); toast(`${tags.length} 件のタグを削除しました`); render();
+        } }, "この範囲のタグをすべて削除"))));
+  panel.open = !!state.delOpen;
+  panel.addEventListener("toggle", () => { state.delOpen = panel.open; });
+  panel.querySelector("#d_match").addEventListener("change", e => { state.delMatch = +e.target.value; render(); });
+  panel.querySelector("#d_q").addEventListener("change", e => { state.delQ = e.target.value; render(); });
+  return panel;
+}
 
 /* ------------------------------------------------------------ 画面: 出力・バックアップ */
 views.export = async () => {
@@ -1183,7 +1229,7 @@ async function restoreText(txt) {
 /* ------------------------------------------------------------ 画面: イベント設定 */
 views.events = async () => {
   const wrap = h("div", { class: "stack" }, h("h2", null, "イベント設定"),
-    h("p", { class: "small muted", style: "margin:0" }, "タグ付け画面のボタンです。上から順に表示され、先頭 9 個は外付けキーボードの 1〜9 でも入力できます。名前を変えても既存タグのイベント名は変わりません。"));
+    h("p", { class: "small muted", style: "margin:0" }, "解析画面のボタンです。上から順に表示され、先頭 9 個は外付けキーボードの 1〜9 でも入力できます。名前を変えても既存タグのイベント名は変わりません。"));
   const list = S.eventTypes;
   const move = async (i, d) => {
     const a = list[i], b = list[i + d]; if (!b) return;
