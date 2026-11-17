@@ -150,6 +150,12 @@ tr.sel td { background: color-mix(in srgb, var(--mark) 22%, transparent); }
 .events { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
 .evbtn { min-height: 56px; padding: 0 6px; line-height: 1.15; font-size: .92rem; border-radius: 10px; border: 0; background: var(--turf); color: var(--on-turf); font-weight: 700; font-size: 1rem; cursor: pointer; position: relative; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
 .evbtn:active { background: var(--turf-strong); transform: scale(.98); }
+.evbtn.opp { background: var(--opp); }
+.lv-stage { position: relative; }
+.lv-stage video { width: 100%; display: block; max-height: clamp(220px, calc(100vh - 380px), 62vh); background: #000; }
+.lv-ov { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; touch-action: none; cursor: crosshair; }
+table.big { font-size: 1.15rem; }
+table.big td.n { font-family: var(--font-num); font-size: 1.5rem; font-weight: 700; }
 .evbtn:disabled { opacity: .35; cursor: default; }
 .evbtn kbd { position: absolute; top: 2px; right: 5px; font-family: var(--font-num); font-size: .75rem; opacity: .7; }
 .side { display: flex; flex-direction: column; gap: 14px; }
@@ -209,6 +215,7 @@ dialog::backdrop { background: rgba(10, 20, 35, .45); }
     <nav class="tabs" id="tabs" aria-label="メニュー">
       <a href="#home" data-r="home">試合</a>
       <a href="#teams" data-r="teams">チーム・選手</a>
+      <a href="#live" data-r="live">ライブ解析</a>
       <a href="#tag" data-r="tag">タグ付け</a>
       <a href="#stats" data-r="stats">集計</a>
       <a href="#export" data-r="export">出力・バックアップ</a>
@@ -1243,7 +1250,9 @@ async function render() {
   document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.r === state.route));
   const view = document.getElementById("view");
   try {
-    for (const v of view.querySelectorAll("video")) { try { v.pause(); v.removeAttribute("src"); v.load(); } catch { } }
+    try { window.__viewCleanup?.(); } catch { }
+    window.__viewCleanup = null;
+    for (const v of view.querySelectorAll("video")) { try { v.pause(); if (!v.srcObject) { v.removeAttribute("src"); v.load(); } } catch { } }
     const el = await views[state.route]();
     view.replaceChildren(el);
   } catch (e) {
@@ -1284,6 +1293,7 @@ window.addEventListener("hashchange", () => { const r = (location.hash || "#home
   render();
 })();
 </script>
+<script src="live.js"></script>
 <script>
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   navigator.serviceWorker.register("sw.js").catch(() => {});
