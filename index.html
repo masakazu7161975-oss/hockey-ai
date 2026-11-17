@@ -1,0 +1,1250 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hockey AI">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#12457f">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Hockey AI Analyzer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Layout: 青い人工芝のピッチとスコアボード。上部タブ＋1画面ツール（iPad 横向き優先、縦・スマホでは1列） */
+:root {
+  --bg: #eef2f6;          /* ピッチ外の明るいグレー（青寄り） */
+  --surface: #ffffff;
+  --surface-2: #e3e9f0;
+  --line: #c9d3de;
+  --fg: #142233;
+  --muted: #5a6b7e;
+  --turf: #1b5aa6;        /* 青い人工芝 */
+  --turf-strong: #12457f;
+  --on-turf: #ffffff;
+  --mark: #f2c230;        /* ピッチラインの黄色 */
+  --opp: #d0612a;         /* 相手チーム */
+  --good: #23824f;
+  --bad: #c33b3b;
+  --shadow: 0 1px 2px rgba(20, 34, 51, .08), 0 4px 14px rgba(20, 34, 51, .06);
+  --font-ui: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+  --font-num: "Barlow Condensed", "DIN Condensed", "Arial Narrow", var(--font-ui);
+  --r: 10px;
+  --tap: 46px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1520; --surface: #152131; --surface-2: #1d2c40; --line: #2c3e55; --fg: #e5edf6;
+    --muted: #93a5ba; --turf: #3b82d6; --turf-strong: #2a6cbb; --on-turf: #ffffff; --mark: #f2c94c;
+    --opp: #e7854f; --good: #4cb37b; --bad: #e46565; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1520; --surface: #152131; --surface-2: #1d2c40; --line: #2c3e55; --fg: #e5edf6;
+  --muted: #93a5ba; --turf: #3b82d6; --turf-strong: #2a6cbb; --on-turf: #ffffff; --mark: #f2c94c;
+  --opp: #e7854f; --good: #4cb37b; --bad: #e46565; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 15px; line-height: 1.5;
+  -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--turf-strong); }
+button, input, select, textarea { font: inherit; color: inherit; }
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.25; }
+h2 { font-size: 1.25rem; }
+h3 { font-size: 1rem; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+
+/* ---- 上部バー */
+.appbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--turf-strong); color: var(--on-turf);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.appbar-in { display: flex; align-items: center; gap: 18px; min-height: 52px; flex-wrap: wrap; }
+.brand { font-family: var(--font-num); font-weight: 700; font-size: 1.35rem; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.brand b { color: var(--mark); }
+.tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
+.tabs a { color: var(--on-turf); opacity: .78; text-decoration: none; padding: 14px 12px 12px; border-bottom: 3px solid transparent; white-space: nowrap; font-weight: 600; font-size: .95rem; }
+.tabs a.on { opacity: 1; border-bottom-color: var(--mark); }
+.tabs a:focus-visible { outline: 2px solid var(--mark); outline-offset: -2px; }
+
+main { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 18px 40px; max-width: 1400px; margin: 0 auto; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.spread { justify-content: space-between; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; box-shadow: var(--shadow); min-width: 0; }
+.label { font-size: .75rem; font-weight: 700; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+
+/* ---- ボタン・入力 */
+.btn { min-height: var(--tap); padding: 0 16px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--turf); border-color: var(--turf); color: var(--on-turf); }
+.btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+.btn.ghost { background: transparent; }
+.btn.sm { min-height: 36px; padding: 0 12px; font-size: .88rem; }
+.btn:focus-visible, .chip:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid color-mix(in srgb, var(--turf) 55%, transparent); outline-offset: 1px; }
+.btn[disabled] { opacity: .45; pointer-events: none; }
+label.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--muted); font-weight: 600; min-width: 0; }
+input[type=text], input[type=date], input[type=time], input[type=number], select, textarea { min-height: var(--tap); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: var(--surface); color: var(--fg); font-weight: 400; width: 100%; font-size: 16px; }
+textarea { min-height: 110px; font-family: var(--font-ui); }
+.check { display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); cursor: pointer; }
+.check input { width: 22px; height: 22px; accent-color: var(--turf); }
+.grid-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+
+/* ---- セグメント・チップ */
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 3px; flex-wrap: wrap; }
+.seg button { min-height: 40px; padding: 0 14px; border: 0; background: transparent; border-radius: 8px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.seg button.on { background: var(--surface); box-shadow: var(--shadow); color: var(--turf); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { min-height: 40px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-weight: 600; touch-action: manipulation; }
+.chip.on { background: var(--turf); border-color: var(--turf); color: var(--on-turf); }
+
+/* ---- 表 */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+th { background: var(--surface-2); font-size: .78rem; color: var(--muted); font-weight: 700; position: sticky; top: 0; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: 0; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: color-mix(in srgb, var(--turf) 6%, transparent); }
+tr.sel td { background: color-mix(in srgb, var(--mark) 22%, transparent); }
+.empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+
+/* ---- 試合カード */
+.matches { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.mcard { display: flex; flex-direction: column; gap: 10px; }
+.mcard .vs { font-weight: 700; font-size: 1.05rem; }
+.mcard .date { font-family: var(--font-num); font-size: 1.1rem; font-weight: 600; color: var(--muted); }
+.score { font-family: var(--font-num); font-weight: 700; font-size: 1.6rem; letter-spacing: .03em; }
+.pill { display: inline-flex; align-items: center; min-height: 24px; padding: 0 9px; border-radius: 12px; font-size: .75rem; font-weight: 700; background: var(--surface-2); color: var(--muted); }
+.pill.ok { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+.pill.warn { background: color-mix(in srgb, var(--opp) 16%, transparent); color: var(--opp); }
+.pill.ai { background: color-mix(in srgb, var(--mark) 28%, transparent); color: var(--fg); }
+
+/* ---- タグ付け画面 */
+.tagging { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.player-box { background: #000; border-radius: var(--r); overflow: hidden; position: relative; }
+.player-box video { width: 100%; display: block; max-height: clamp(220px, calc(100vh - 380px), 62vh); background: #000; }
+.picker { aspect-ratio: 16 / 9; max-width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #dfe7f1; text-align: center; padding: 20px;
+  background: repeating-linear-gradient(90deg, #12457f 0 60px, #154d8c 60px 120px); }
+.picker .btn { background: var(--mark); color: #142233; border-color: var(--mark); }
+.scoreboard { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.scoreboard .btn.sm { padding: 0 10px; }
+.timecode { font-family: var(--font-num); font-weight: 700; font-size: 1.5rem; margin-right: 4px; font-variant-numeric: tabular-nums; min-width: 9.5ch; }
+.timeline { position: relative; height: 34px; background: var(--surface-2); border-radius: 8px; cursor: pointer; touch-action: none; border: 1px solid var(--line); overflow: hidden; }
+.timeline .q { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--line); }
+.timeline .mk { position: absolute; top: 5px; width: 4px; height: 24px; border-radius: 2px; transform: translateX(-2px); background: var(--turf); }
+.timeline .mk.opp { background: var(--opp); }
+.timeline .mk.sel { outline: 2px solid var(--fg); top: 2px; height: 30px; }
+.timeline .ph { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--bad); pointer-events: none; }
+.events { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
+.evbtn { min-height: 56px; padding: 0 6px; line-height: 1.15; font-size: .92rem; border-radius: 10px; border: 0; background: var(--turf); color: var(--on-turf); font-weight: 700; font-size: 1rem; cursor: pointer; position: relative; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.evbtn:active { background: var(--turf-strong); transform: scale(.98); }
+.evbtn:disabled { opacity: .35; cursor: default; }
+.evbtn kbd { position: absolute; top: 2px; right: 5px; font-family: var(--font-num); font-size: .75rem; opacity: .7; }
+.side { display: flex; flex-direction: column; gap: 14px; }
+.roster { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 6px; }
+.shirt { min-height: 62px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px; touch-action: manipulation; }
+.shirt .no { font-family: var(--font-num); font-weight: 700; font-size: 1.5rem; line-height: 1; }
+.shirt .nm { font-size: .7rem; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shirt.on { background: var(--turf); border-color: var(--turf); color: var(--on-turf); }
+.shirt.on .nm { color: var(--on-turf); opacity: .85; }
+.shirt.none .no { font-size: .9rem; font-family: var(--font-ui); }
+.lasttag { border-left: 4px solid var(--mark); }
+/* iOS では非表示の file 入力をプログラムから開けないことがあるため、透明な入力をボタンに重ねて直接タップさせる */
+.filebtn { position: relative; overflow: hidden; }
+.filebtn .filehit { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 100px; }
+.vstatus { padding: 10px 12px; border-radius: 9px; background: var(--surface-2); font-size: .9rem; }
+.vstatus.err { background: color-mix(in srgb, var(--bad) 14%, var(--surface)); color: var(--fg); border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line)); }
+.flash { animation: flash .6s ease-out; }
+@keyframes flash { from { background: color-mix(in srgb, var(--mark) 45%, var(--surface)); } to { background: var(--surface); } }
+
+/* ---- 集計 */
+.tabbar { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabbar button { border: 0; background: none; padding: 10px 14px; font-weight: 700; color: var(--muted); border-bottom: 3px solid transparent; cursor: pointer; white-space: nowrap; min-height: var(--tap); }
+.tabbar button.on { color: var(--turf); border-bottom-color: var(--turf); }
+
+/* ---- ダイアログ・トースト */
+dialog { border: 0; border-radius: 14px; padding: 0; width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); background: var(--surface); color: var(--fg); box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+dialog::backdrop { background: rgba(10, 20, 35, .45); }
+.dlg-h { padding: 16px 18px 0; }
+.dlg-b { padding: 14px 18px; overflow: auto; max-height: calc(100vh - 200px); }
+.dlg-f { padding: 12px 18px 16px; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; border-top: 1px solid var(--line); }
+#toast { position: fixed; left: 50%; top: calc(60px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 50; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; width: max-content; max-width: calc(100vw - 32px); }
+#toast div { background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 22px; font-weight: 600; box-shadow: var(--shadow); }
+.notice { border: 1px solid color-mix(in srgb, var(--mark) 60%, var(--line)); background: color-mix(in srgb, var(--mark) 12%, var(--surface)); border-radius: var(--r); padding: 12px 14px; }
+.steps { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 4px; }
+
+@media (max-width: 980px) {
+  .tagging { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 520px) {
+  .timecode { font-size: 1.35rem; }
+  .brand { font-size: 1.1rem; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+
+<header class="appbar">
+  <div class="appbar-in">
+    <div class="brand">Hockey <b>AI</b> Analyzer</div>
+    <nav class="tabs" id="tabs" aria-label="メニュー">
+      <a href="#home" data-r="home">試合</a>
+      <a href="#teams" data-r="teams">チーム・選手</a>
+      <a href="#tag" data-r="tag">タグ付け</a>
+      <a href="#stats" data-r="stats">集計</a>
+      <a href="#export" data-r="export">出力・バックアップ</a>
+      <a href="#events" data-r="events">イベント設定</a>
+    </nav>
+  </div>
+</header>
+<main id="view" aria-live="polite"><p class="muted">読み込み中…</p></main>
+<dialog id="dlg"></dialog>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+/* =====================================================================
+   Hockey AI Analyzer（iPad版）
+   - データは iPad の IndexedDB にのみ保存（外部送信なし）
+   - 動画は「ファイル」/写真から選択し、端末内で再生（アップロードなし）
+   - tags.source: manual / ai, tags.status: confirmed / estimated / rejected
+     （AI推定値と人が確認した確定値を区別。第2段階用）
+   ===================================================================== */
+
+const CATEGORIES = ["一般男子", "一般女子", "大学男子", "大学女子", "高校男子", "高校女子", "中学男子", "中学女子", "U-15", "U-12", "その他"];
+const POSITIONS = ["GK", "DF", "MF", "FW", "未設定"];
+const DEFAULT_EVENTS = [
+  ["シュート", "ゴール,枠内(セーブ),枠外,ブロック"], ["PC", "ゴール,シュートあり,シュートなし"], ["PS", "ゴール,失敗"],
+  ["サークル侵入", "シュートあり,シュートなし"], ["ボール奪取", ""], ["ボールロスト", ""], ["ファウル", ""], ["カード", "グリーン,イエロー,レッド"],
+];
+const GOAL_EVENTS = ["シュート", "PS"];
+const ON_TARGET = ["ゴール", "枠内(セーブ)"];
+const STATUS_LABEL = { confirmed: "確定", estimated: "AI推定(未確認)", rejected: "却下" };
+const SOURCE_LABEL = { manual: "手入力", ai: "AI" };
+
+/* ------------------------------------------------------------ 保存（IndexedDB） */
+const STORES = ["teams", "players", "matches", "eventTypes", "tags", "videos", "aiTracks", "meta"];
+const DB = {
+  db: null,
+  open() {
+    return new Promise((res, rej) => {
+      let req;
+      try { req = indexedDB.open("hockey-ai-analyzer", 2); } catch (e) { return rej(e); }
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        for (const s of STORES) {
+          if (d.objectStoreNames.contains(s)) continue;
+          const os = s === "videos" ? d.createObjectStore(s, { keyPath: "matchId" }) : s === "meta" ? d.createObjectStore(s, { keyPath: "id" }) : d.createObjectStore(s, { keyPath: "id", autoIncrement: true });
+          if (s === "players") os.createIndex("teamId", "teamId");
+          if (s === "tags" || s === "aiTracks") os.createIndex("matchId", "matchId");
+        }
+      };
+      req.onsuccess = () => { this.db = req.result; res(); };
+      req.onerror = () => rej(req.error);
+    });
+  },
+  _tx(store, mode, fn) {
+    return new Promise((res, rej) => {
+      const tx = this.db.transaction(store, mode);
+      let out;
+      const r = fn(tx.objectStore(store));
+      if (r) r.onsuccess = () => { out = r.result; };
+      tx.oncomplete = () => res(out);
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error || new Error("保存が中断されました"));
+    });
+  },
+  all(s) { return this._tx(s, "readonly", os => os.getAll()); },
+  get(s, k) { return this._tx(s, "readonly", os => os.get(k)); },
+  put(s, v) { return this._tx(s, "readwrite", os => os.put(v)); },
+  del(s, k) { return this._tx(s, "readwrite", os => os.delete(k)); },
+  bulk(ops) { // [[store, "put"|"delete"|"clear", value]]
+    const names = [...new Set(ops.map(o => o[0]))];
+    return new Promise((res, rej) => {
+      if (!names.length) return res();
+      const tx = this.db.transaction(names, "readwrite");
+      for (const [s, op, v] of ops) { const os = tx.objectStore(s); op === "clear" ? os.clear() : op === "delete" ? os.delete(v) : os.put(v); }
+      tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+    });
+  },
+};
+
+/* メモリ上のキャッシュ（小規模データなので全件保持） */
+const S = { teams: [], players: [], matches: [], eventTypes: [], tags: [], videoKeys: new Set() };
+async function reload() {
+  for (const s of ["teams", "players", "matches", "eventTypes", "tags"]) S[s] = await DB.all(s);
+  S.eventTypes.sort((a, b) => a.order - b.order || a.id - b.id);
+  S.videoKeys = new Set((await DB._tx("videos", "readonly", os => os.getAllKeys())) || []);
+}
+const now = () => new Date().toISOString();
+const team = id => S.teams.find(t => t.id === id);
+const player = id => S.players.find(p => p.id === id);
+const match = id => S.matches.find(m => m.id === id);
+const playersOf = (teamId, activeOnly) => S.players.filter(p => p.teamId === teamId && (!activeOnly || p.active !== false))
+  .sort((a, b) => (a.number ?? 999) - (b.number ?? 999) || a.name.localeCompare(b.name, "ja"));
+const pLabel = p => p ? (p.number != null ? `#${p.number} ` : "") + p.name : "";
+const mLabel = m => `${m.date}  ${team(m.teamId)?.name ?? "?"} vs ${team(m.oppId)?.name ?? "?"}（${m.category || "-"}）`;
+const eventResults = name => (S.eventTypes.find(e => e.name === name)?.results || "").split(",").map(s => s.trim()).filter(Boolean);
+
+/* ------------------------------------------------------------ 小道具 */
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (k === "html") el.innerHTML = v;
+    else if (k in el && k !== "list" && typeof v !== "string") el[k] = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+function fmt(sec) {
+  if (sec == null || isNaN(sec)) return "";
+  sec = Math.max(0, sec);
+  const hh = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = Math.floor(sec % 60), t = Math.floor((sec % 1) * 10 + 1e-6);
+  const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+  return (hh ? hh + ":" : "") + `${mm}:${ss}.${t}`;
+}
+function parseTime(txt) {
+  txt = String(txt).trim();
+  if (!txt) throw new Error("empty");
+  let total = 0;
+  for (const p of txt.split(":")) { const v = parseFloat(p); if (isNaN(v)) throw new Error("bad"); total = total * 60 + v; }
+  return total;
+}
+function toast(msg) {
+  const el = h("div", null, msg);
+  document.getElementById("toast").append(el);
+  setTimeout(() => el.remove(), 2600);
+}
+const prefs = {
+  get(k, d) { try { const v = localStorage.getItem("hai." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("hai." + k, JSON.stringify(v)); } catch { } },
+};
+
+/* ダイアログ（confirm/prompt は使わない） */
+function dialog(title, body, buttons) {
+  const dlg = document.getElementById("dlg");
+  return new Promise(resolve => {
+    dlg.replaceChildren(
+      h("div", { class: "dlg-h" }, h("h2", null, title)),
+      h("div", { class: "dlg-b" }, body),
+      h("div", { class: "dlg-f" }, buttons.map(b => h("button", {
+        class: "btn " + (b.cls || ""), type: "button",
+        onclick: async () => { if (b.check && !(await b.check())) return; resolve(b.value); dlg.close(); },
+      }, b.label))),
+    );
+    dlg.onclose = () => resolve(dlg.returnValue === "" ? undefined : undefined);
+    dlg.onclick = e => { if (e.target === dlg) { dlg.close(); } };
+    dlg.showModal();
+  });
+}
+async function confirmDlg(title, msg, okLabel = "削除する") {
+  return (await dialog(title, h("p", null, msg), [{ label: "キャンセル", value: false }, { label: okLabel, cls: "danger", value: true }])) === true;
+}
+function field(label, input) { return h("label", { class: "field" }, label, input); }
+function select(id, options, value) {
+  return h("select", { id }, options.map(([v, t]) => h("option", { value: v, selected: String(v) === String(value) }, t)));
+}
+function table(cols, rows, opts = {}) {
+  if (!rows.length) return h("div", { class: "tablewrap" }, h("div", { class: "empty" }, opts.empty || "データがありません"));
+  return h("div", { class: "tablewrap", style: opts.maxH ? `max-height:${opts.maxH}` : null },
+    h("table", null,
+      h("thead", null, h("tr", null, cols.map(c => h("th", { class: c.n ? "n" : null }, c.t)))),
+      h("tbody", null, rows.map((r, i) => {
+        const tr = h("tr", { class: (opts.onRow ? "click " : "") + (opts.selected && opts.selected(r) ? "sel" : "") },
+          cols.map(c => { const v = c.f ? c.f(r) : r[c.k]; return h("td", { class: c.n ? "n" : null }, v == null || (typeof v === "number" && isNaN(v)) ? "—" : v); }));
+        if (opts.onRow) tr.addEventListener("click", () => opts.onRow(r, i));
+        return tr;
+      }))));
+}
+
+/* ------------------------------------------------------------ ファイル保存（共有シート優先） */
+async function saveFile(name, text, mime) {
+  const blob = new Blob([text], { type: mime });
+  try {
+    const file = new File([blob], name, { type: mime });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: name });
+      return;
+    }
+  } catch (e) { if (e && e.name === "AbortError") return; }
+  try {
+    const a = h("a", { href: URL.createObjectURL(blob), download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast(`${name} の保存を開始しました。保存されない場合は「コピー」をお使いください`);
+  } catch { toast("保存できませんでした。「コピー」をお使いください"); }
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast("コピーしました"); }
+  catch {
+    const ta = h("textarea", { readOnly: true }, text);
+    dialog("コピーしてください", ta, [{ label: "閉じる", value: true }]);
+    setTimeout(() => { ta.focus(); ta.select(); }, 50);
+  }
+}
+const csvCell = v => { if (v == null) return ""; const s = String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const toCSV = (cols, rows) => "﻿" + [cols.map(c => csvCell(c.t)).join(","), ...rows.map(r => cols.map(c => csvCell(c.f ? c.f(r) : r[c.k])).join(","))].join("\r\n");
+
+/* ------------------------------------------------------------ 集計 */
+function tagRows(matchIds, confirmedOnly) {
+  const ids = new Set(matchIds);
+  return S.tags.filter(t => ids.has(t.matchId) && t.status !== "rejected" && (!confirmedOnly || t.status === "confirmed"))
+    .map(t => {
+      const m = match(t.matchId), p = player(t.playerId), tm = team(t.teamId);
+      return { ...t, m, date: m?.date, opp: team(m?.oppId)?.name, category: m?.category, teamName: tm?.name ?? "（未設定）",
+        number: p?.number, playerName: p?.name ?? "", playerLabel: p ? pLabel(p) : "（選手未設定）", matchLabel: m ? `${m.date} vs ${team(m.oppId)?.name}` : "?" };
+    })
+    .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.matchId - b.matchId || a.time - b.time);
+}
+function pivot(rows, keyFn, keyCols) {
+  const evOrder = S.eventTypes.map(e => e.name);
+  const evs = [...new Set(rows.map(r => r.eventType))].sort((a, b) => (evOrder.indexOf(a) + 1 || 999) - (evOrder.indexOf(b) + 1 || 999));
+  const groups = new Map();
+  for (const r of rows) {
+    const k = keyFn(r);
+    if (!groups.has(k.key)) groups.set(k.key, { ...k.vals, _n: {}, _goals: 0, _ont: 0, _matches: new Set() });
+    const g = groups.get(k.key);
+    g._n[r.eventType] = (g._n[r.eventType] || 0) + 1;
+    if (GOAL_EVENTS.includes(r.eventType) && r.result === "ゴール") g._goals++;
+    if (r.eventType === "シュート" && ON_TARGET.includes(r.result)) g._ont++;
+    g._matches.add(r.matchId);
+  }
+  const out = [...groups.values()].map(g => {
+    const o = { ...g };
+    for (const e of evs) o[e] = g._n[e] || 0;
+    o["得点"] = g._goals; o["枠内シュート"] = g._ont;
+    o["決定率(%)"] = o["シュート"] ? Math.round(g._goals / o["シュート"] * 1000) / 10 : null;
+    o["試合数"] = g._matches.size;
+    return o;
+  });
+  const cols = [...keyCols, ...evs.map(e => ({ t: e, k: e, n: true })), { t: "得点", k: "得点", n: true }, { t: "枠内シュート", k: "枠内シュート", n: true }, { t: "シュート決定率(%)", k: "決定率(%)", n: true }];
+  return { cols, rows: out };
+}
+const teamSummary = rows => pivot(rows, r => ({ key: r.teamName, vals: { team: r.teamName } }), [{ t: "チーム", k: "team" }]);
+const matchSummary = rows => pivot(rows, r => ({ key: r.matchId + "|" + r.teamName, vals: { match: r.matchLabel, team: r.teamName } }), [{ t: "試合", k: "match" }, { t: "チーム", k: "team" }]);
+function playerSummary(rows) {
+  const p = pivot(rows.filter(r => r.playerId != null), r => ({ key: r.playerId, vals: { team: r.teamName, player: r.playerLabel, _no: r.number ?? 999 } }),
+    [{ t: "チーム", k: "team" }, { t: "選手", k: "player" }, { t: "出場試合(タグあり)", k: "試合数", n: true }]);
+  p.rows.sort((a, b) => a.team.localeCompare(b.team, "ja") || a._no - b._no);
+  return p;
+}
+function quarterSummary(rows) {
+  const qs = ["Q1", "Q2", "Q3", "Q4", "Q?"];
+  const map = new Map();
+  for (const r of rows) {
+    const k = r.teamName + "|" + r.eventType;
+    if (!map.has(k)) map.set(k, { team: r.teamName, ev: r.eventType, Q1: 0, Q2: 0, Q3: 0, Q4: 0, "Q?": 0 });
+    map.get(k)[r.quarter ? "Q" + r.quarter : "Q?"]++;
+  }
+  const used = qs.filter(q => [...map.values()].some(v => v[q]));
+  return { cols: [{ t: "チーム", k: "team" }, { t: "イベント", k: "ev" }, ...used.map(q => ({ t: q, k: q, n: true }))], rows: [...map.values()] };
+}
+const TAG_COLS = [
+  { t: "タグID", k: "id" }, { t: "試合日", k: "date" }, { t: "対戦相手", k: "opp" }, { t: "カテゴリー", k: "category" },
+  { t: "動画時刻", f: r => fmt(r.time) }, { t: "動画秒", f: r => r.time.toFixed(2) }, { t: "Q", k: "quarter" }, { t: "イベント", k: "eventType" },
+  { t: "結果", f: r => r.result || "" }, { t: "チーム", k: "teamName" }, { t: "背番号", k: "number" }, { t: "選手", k: "playerName" },
+  { t: "メモ", f: r => r.memo || "" }, { t: "入力元", f: r => SOURCE_LABEL[r.source] }, { t: "状態", f: r => STATUS_LABEL[r.status] },
+];
+function anonymize(cols) {
+  return cols.map(c => {
+    if (c.t === "選手" && c.k === "playerName") return { ...c, f: r => r.playerName ? "***" : "" };
+    if (c.t === "選手" && c.k === "player") return { ...c, f: r => (r.player.match(/^#\d+/) || ["***"])[0] };
+    if (c.t === "氏名") return { ...c, f: () => "***" };
+    return c;
+  });
+}
+
+/* ------------------------------------------------------------ 画面: 試合 */
+const views = {};
+const state = { route: "home", matchId: prefs.get("matchId", null), statTab: "team", selTag: null, lead: prefs.get("lead", 3), autoplay: prefs.get("autoplay", true) };
+
+views.home = async () => {
+  const wrap = h("div", { class: "stack" });
+  const head = h("div", { class: "row spread" }, h("h2", null, "試合"),
+    h("button", { class: "btn primary", onclick: () => matchDialog(), disabled: S.teams.length < 2 }, "＋ 試合を登録"));
+  wrap.append(head);
+  if (S.teams.length < 2) {
+    wrap.append(h("div", { class: "panel stack" },
+      h("h3", null, "はじめに"),
+      h("ol", { class: "steps" },
+        h("li", null, "「チーム・選手」で自チームと対戦相手を登録（選手は氏名・背番号・ポジション）"),
+        h("li", null, "この画面で試合（日付・対戦相手・カテゴリー）を登録"),
+        h("li", null, "「タグ付け」で動画を選び、選手を選んでイベントボタンをタップ"),
+        h("li", null, "「集計」で選手別・チーム別の数字を確認、「出力」で CSV 保存")),
+      h("div", { class: "row" },
+        h("a", { class: "btn primary", href: "#teams" }, "チームを登録する"),
+        h("button", { class: "btn", onclick: loadSample }, "サンプルデータで試す")),
+      h("p", { class: "small muted" }, "サンプルデータは架空のチーム・選手です。後から「出力・バックアップ」の全削除で消せます。")));
+  }
+  const ms = [...S.matches].sort((a, b) => (b.date + (b.kickoff || "")).localeCompare(a.date + (a.kickoff || "")));
+  if (S.teams.length >= 2 && !ms.length) wrap.append(h("div", { class: "panel empty" }, "試合がまだありません。「＋ 試合を登録」から追加してください。"));
+  wrap.append(h("div", { class: "matches" }, ms.map(m => {
+    const n = S.tags.filter(t => t.matchId === m.id).length;
+    const vid = S.videoKeys.has(m.id) ? h("span", { class: "pill ok" }, "動画 iPad内に保存") : m.videoName ? h("span", { class: "pill" }, "動画 " + m.videoName) : h("span", { class: "pill warn" }, "動画未選択");
+    return h("div", { class: "panel mcard" },
+      h("div", { class: "row spread" }, h("span", { class: "date" }, m.date + (m.kickoff ? "  " + m.kickoff : "")), h("span", { class: "pill" }, m.category || "-")),
+      h("div", { class: "row spread" }, h("div", { class: "vs grow" }, `${team(m.teamId)?.name ?? "?"}  vs  ${team(m.oppId)?.name ?? "?"}`),
+        h("div", { class: "score" }, `${m.scoreOwn ?? 0} - ${m.scoreOpp ?? 0}`)),
+      m.competition || m.venue ? h("div", { class: "small muted" }, [m.competition, m.venue].filter(Boolean).join(" ・ ")) : null,
+      h("div", { class: "row" }, h("span", { class: "pill" }, `タグ ${n}件`), vid),
+      h("div", { class: "row" },
+        h("button", { class: "btn primary", onclick: () => { setMatch(m.id); location.hash = "#tag"; } }, "タグ付け"),
+        h("button", { class: "btn", onclick: () => matchDialog(m) }, "編集"),
+        h("button", { class: "btn danger ghost", onclick: async () => {
+          if (!(await confirmDlg("試合を削除", `${mLabel(m)} と、そのタグ ${n} 件を削除します。元に戻せません。`))) return;
+          await DB.bulk([["matches", "delete", m.id], ["videos", "delete", m.id], ...S.tags.filter(t => t.matchId === m.id).map(t => ["tags", "delete", t.id])]);
+          dropVideoURL(m.id); await reload(); toast("試合を削除しました"); render();
+        } }, "削除")));
+  })));
+  wrap.append(await storagePanel());
+  return wrap;
+};
+
+async function storagePanel() {
+  const p = h("div", { class: "panel stack small" }, h("h3", null, "データの保存について"));
+  let persisted = false, est = null;
+  try { persisted = await navigator.storage?.persisted?.(); est = await navigator.storage?.estimate?.(); } catch { }
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  p.append(
+    h("p", null, "試合・選手・タグのデータは、この iPad のブラウザ内にだけ保存されます。外部へは送信しません。"),
+    h("ul", { class: "steps" },
+      h("li", null, standalone ? "ホーム画面から起動中です（データが消えにくい状態）。" : "Safari の共有ボタン →「ホーム画面に追加」で起動すると、データが自動削除されにくくなります。"),
+      h("li", null, "iPad の故障やブラウザのデータ削除に備え、定期的に「出力・バックアップ」で全データを保存してください。"),
+      h("li", null, `保存の固定: ${persisted ? "有効" : "未許可"}` + (est ? ` ・ 使用量 ${(est.usage / 1e6).toFixed(1)} MB / 上限目安 ${(est.quota / 1e9).toFixed(1)} GB` : ""))));
+  return p;
+}
+
+function matchDialog(m) {
+  m = m || {};
+  const teams = [...S.teams].sort((a, b) => (b.own ? 1 : 0) - (a.own ? 1 : 0));
+  const own = m.teamId ?? (teams.find(t => t.own) || teams[0])?.id;
+  const opp = m.oppId ?? teams.find(t => t.id !== own)?.id;
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+  const opts = teams.map(t => [t.id, t.name]);
+  const body = h("div", { class: "grid-form" },
+    field("試合日 *", h("input", { type: "date", id: "f_date", value: m.date || today })),
+    field("開始時刻", h("input", { type: "time", id: "f_kick", value: m.kickoff || "10:00" })),
+    field("カテゴリー *", select("f_cat", CATEGORIES.map(c => [c, c]), m.category || prefs.get("lastCat", CATEGORIES[0]))),
+    field("自チーム *", select("f_own", opts, own)),
+    field("対戦相手 *", select("f_opp", opts, opp)),
+    field("大会名", h("input", { type: "text", id: "f_comp", value: m.competition || "" })),
+    field("会場", h("input", { type: "text", id: "f_venue", value: m.venue || "" })),
+    field("得点（自）", h("input", { type: "number", id: "f_so", min: 0, value: m.scoreOwn ?? 0, inputmode: "numeric" })),
+    field("得点（相手）", h("input", { type: "number", id: "f_sp", min: 0, value: m.scoreOpp ?? 0, inputmode: "numeric" })),
+    field("メモ", h("input", { type: "text", id: "f_memo", value: m.memo || "" })),
+    h("p", { id: "f_err", class: "small", style: "color:var(--bad)" }));
+  const v = id => document.getElementById(id).value;
+  dialog(m.id ? "試合情報の編集" : "試合を登録", body, [
+    { label: "キャンセル", value: false },
+    { label: "保存", cls: "primary", value: true, check: async () => {
+      if (!v("f_date")) { document.getElementById("f_err").textContent = "試合日を入力してください"; return false; }
+      if (v("f_own") === v("f_opp")) { document.getElementById("f_err").textContent = "自チームと対戦相手が同じです"; return false; }
+      const rec = { ...m, date: v("f_date"), kickoff: v("f_kick"), category: v("f_cat"), teamId: +v("f_own"), oppId: +v("f_opp"),
+        competition: v("f_comp").trim(), venue: v("f_venue").trim(), scoreOwn: +v("f_so") || 0, scoreOpp: +v("f_sp") || 0, memo: v("f_memo").trim(), updatedAt: now() };
+      if (!m.id) rec.createdAt = now();
+      const id = await DB.put("matches", rec);
+      prefs.set("lastCat", rec.category);
+      if (!m.id) setMatch(id);
+      await reload(); toast(m.id ? "保存しました" : "試合を登録しました"); render();
+      return true;
+    } }]);
+}
+
+/* ------------------------------------------------------------ 画面: チーム・選手 */
+views.teams = async () => {
+  const sel = prefs.get("teamId", null);
+  const teams = [...S.teams].sort((a, b) => (b.own ? 1 : 0) - (a.own ? 1 : 0) || a.name.localeCompare(b.name, "ja"));
+  const cur = teams.find(t => t.id === sel) || teams[0];
+  const wrap = h("div", { class: "stack" },
+    h("div", { class: "row spread" }, h("h2", null, "チーム・選手"), h("button", { class: "btn primary", onclick: () => teamDialog() }, "＋ チームを追加")));
+  if (!teams.length) { wrap.append(h("div", { class: "panel empty" }, "まず自チームを追加してください。対戦相手も同じようにチームとして登録します。")); return wrap; }
+  wrap.append(h("div", { class: "chips" }, teams.map(t => h("button", {
+    class: "chip" + (t.id === cur.id ? " on" : ""), onclick: () => { prefs.set("teamId", t.id); render(); },
+  }, (t.own ? "★ " : "") + t.name + ` (${playersOf(t.id).length})`))));
+
+  const list = playersOf(cur.id);
+  const panel = h("div", { class: "panel stack" },
+    h("div", { class: "row spread" },
+      h("div", { class: "row" }, h("span", { style: `display:inline-block;width:18px;height:18px;border-radius:4px;background:${cur.color || "#888"};border:1px solid var(--line)` }),
+        h("h3", null, cur.name), cur.own ? h("span", { class: "pill ok" }, "自チーム") : null),
+      h("div", { class: "row" },
+        h("button", { class: "btn sm", onclick: () => teamDialog(cur) }, "チーム編集"),
+        h("button", { class: "btn sm danger ghost", onclick: async () => {
+          if (S.matches.some(m => m.teamId === cur.id || m.oppId === cur.id)) return toast("試合に登録されているチームは削除できません");
+          if (!(await confirmDlg("チームを削除", `${cur.name} と所属選手 ${list.length} 名を削除します。`))) return;
+          await DB.bulk([["teams", "delete", cur.id], ...list.map(p => ["players", "delete", p.id])]);
+          await reload(); render();
+        } }, "削除"))),
+    table([{ t: "背番号", f: p => p.number ?? "—", n: true }, { t: "氏名", k: "name" }, { t: "ポジション", k: "position" },
+      { t: "在籍", f: p => p.active === false ? "退部/休部" : "○" }, { t: "メモ", f: p => p.memo || "" }],
+      list, { onRow: p => playerDialog(cur, p), empty: "選手が未登録です。下のフォームから追加してください。" }),
+    h("p", { class: "small muted" }, "行をタップすると編集・削除できます。"));
+
+  const fNo = h("input", { type: "number", id: "np_no", min: 0, max: 999, inputmode: "numeric", placeholder: "10" });
+  const fName = h("input", { type: "text", id: "np_name", placeholder: "山田 太郎" });
+  const fPos = select("np_pos", POSITIONS.map(p => [p, p]), prefs.get("lastPos", "MF"));
+  const add = async () => {
+    const name = fName.value.trim(); const no = fNo.value === "" ? null : +fNo.value;
+    if (!name) return toast("氏名を入力してください");
+    if (no != null && list.some(p => p.number === no)) return toast(`背番号 ${no} は既に使われています`);
+    await DB.put("players", { teamId: cur.id, name, number: no, position: fPos.value, active: true, memo: "", createdAt: now() });
+    prefs.set("lastPos", fPos.value);
+    await reload(); await render(); document.getElementById("np_no")?.focus();
+  };
+  const addRow = h("div", { class: "panel stack" }, h("h3", null, "選手を追加"),
+    h("div", { class: "grid-form" }, field("背番号", fNo), field("氏名 *", fName), field("ポジション", fPos),
+      h("div", { style: "display:flex;align-items:flex-end" }, h("button", { class: "btn primary", style: "width:100%", onclick: add }, "追加"))),
+    h("details", null, h("summary", { class: "small", style: "cursor:pointer;min-height:36px" }, "まとめて貼り付けで登録"),
+      h("div", { class: "stack", style: "margin-top:8px" },
+        h("p", { class: "small muted" }, "1行に1人、「背番号,氏名,ポジション」の形式（例: 10,山田 太郎,FW）。Numbers や Excel からのコピーも可（タブ区切り）。"),
+        h("textarea", { id: "bulk" }),
+        h("button", { class: "btn", onclick: async () => {
+          const lines = document.getElementById("bulk").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          const used = new Set(list.map(p => p.number)); const ops = []; const skipped = [];
+          for (const l of lines) {
+            const [no, name, pos] = l.split(/[,\t、]/).map(s => (s || "").trim());
+            const n = no === "" || isNaN(+no) ? null : +no;
+            if (!name || (n != null && used.has(n))) { skipped.push(l); continue; }
+            used.add(n);
+            ops.push(["players", "put", { teamId: cur.id, name, number: n, position: POSITIONS.includes((pos || "").toUpperCase()) ? pos.toUpperCase() : "未設定", active: true, memo: "", createdAt: now() }]);
+          }
+          await DB.bulk(ops); await reload(); render();
+          toast(`${ops.length}名を登録しました` + (skipped.length ? `（${skipped.length}行は重複・不備のため除外）` : ""));
+        } }, "まとめて登録"))));
+  fName.addEventListener("keydown", e => { if (e.key === "Enter") add(); });
+  wrap.append(panel, addRow);
+  return wrap;
+};
+
+function teamDialog(t) {
+  t = t || {};
+  const body = h("div", { class: "grid-form" },
+    field("チーム名 *", h("input", { type: "text", id: "t_name", value: t.name || "" })),
+    field("チームカラー", h("input", { type: "color", id: "t_color", value: t.color || "#1b5aa6", style: "min-height:46px;width:100%" })),
+    h("label", { class: "check" }, h("input", { type: "checkbox", id: "t_own", checked: t.id ? !!t.own : !S.teams.some(x => x.own) }), "自チーム"),
+    field("メモ", h("input", { type: "text", id: "t_memo", value: t.memo || "" })));
+  dialog(t.id ? "チームの編集" : "チームを追加", body, [{ label: "キャンセル", value: false }, {
+    label: "保存", cls: "primary", value: true, check: async () => {
+      const name = document.getElementById("t_name").value.trim();
+      if (!name) { toast("チーム名を入力してください"); return false; }
+      if (S.teams.some(x => x.name === name && x.id !== t.id)) { toast("同じ名前のチームがあります"); return false; }
+      const id = await DB.put("teams", { ...t, name, color: document.getElementById("t_color").value, own: document.getElementById("t_own").checked, memo: document.getElementById("t_memo").value.trim(), createdAt: t.createdAt || now() });
+      prefs.set("teamId", id); await reload(); render(); return true;
+    },
+  }]);
+}
+
+function playerDialog(tm, p) {
+  const body = h("div", { class: "grid-form" },
+    field("背番号", h("input", { type: "number", id: "p_no", value: p.number ?? "", inputmode: "numeric" })),
+    field("氏名 *", h("input", { type: "text", id: "p_name", value: p.name })),
+    field("ポジション", select("p_pos", POSITIONS.map(x => [x, x]), p.position)),
+    h("label", { class: "check" }, h("input", { type: "checkbox", id: "p_act", checked: p.active !== false }), "在籍中（タグ付け画面に表示）"),
+    field("メモ", h("input", { type: "text", id: "p_memo", value: p.memo || "" })));
+  dialog(`選手の編集（${tm.name}）`, body, [
+    { label: "削除", cls: "danger", value: "del", check: async () => {
+      const n = S.tags.filter(t => t.playerId === p.id).length;
+      if (n) { toast(`この選手のタグが ${n} 件あります。退部の場合は「在籍中」を外してください`); return false; }
+      await DB.del("players", p.id); await reload(); render(); return true;
+    } },
+    { label: "キャンセル", value: false },
+    { label: "保存", cls: "primary", value: true, check: async () => {
+      const name = document.getElementById("p_name").value.trim(); const nv = document.getElementById("p_no").value;
+      const no = nv === "" ? null : +nv;
+      if (!name) { toast("氏名を入力してください"); return false; }
+      if (no != null && playersOf(tm.id).some(x => x.number === no && x.id !== p.id)) { toast(`背番号 ${no} は既に使われています`); return false; }
+      await DB.put("players", { ...p, name, number: no, position: document.getElementById("p_pos").value, active: document.getElementById("p_act").checked, memo: document.getElementById("p_memo").value.trim() });
+      await reload(); render(); return true;
+    } }]);
+}
+
+/* ------------------------------------------------------------ 画面: タグ付け */
+const videoURLs = new Map(); // matchId -> objectURL（このセッション中のみ）
+function dropVideoURL(id) { if (videoURLs.has(id)) { URL.revokeObjectURL(videoURLs.get(id)); videoURLs.delete(id); } }
+function setMatch(id) { state.matchId = id; state.selTag = null; prefs.set("matchId", id); }
+let tagCtx = null; // タグ付け画面の状態（チーム・選手・Q）
+
+views.tag = async () => {
+  const wrap = h("div", { class: "stack" });
+  const ms = [...S.matches].sort((a, b) => b.date.localeCompare(a.date));
+  if (!ms.length) { wrap.append(h("h2", null, "タグ付け"), h("div", { class: "panel empty" }, "試合が登録されていません。「試合」画面から登録してください。")); return wrap; }
+  let m = match(state.matchId) || ms[0];
+  if (m.id !== state.matchId) setMatch(m.id);
+  if (!tagCtx || tagCtx.matchId !== m.id) tagCtx = { matchId: m.id, teamId: m.teamId, playerId: null, quarter: 1, lastTagId: null };
+  if (state.reloadWarn) {
+    const pk = state.reloadWarn; const gb = pk.size ? (pk.size / 1e9).toFixed(1) + " GB" : "";
+    state.reloadWarn = false;
+    const before = pk.stage === "open";
+    wrap.append(h("div", { class: "notice stack" },
+      h("b", null, before ? "写真の選択中に止まり、ページが再読み込みされました" : "動画の再生準備中に止まり、ページが再読み込みされました"),
+      h("span", { class: "small" }, before
+        ? "動画がアプリに届く前（iPad 側の処理中）に止まっています。"
+        : `動画（${pk.name || ""} ${gb}）はアプリに届きましたが、再生の準備中に止まっています。`),
+      h("ul", { class: "steps small" },
+        before ? h("li", null, "iCloud 写真で「ストレージを最適化」がオンの場合、元の動画を iCloud からダウンロードする必要があります。写真アプリで一度その動画を最後まで再生できる状態にしてから選んでください。") : null,
+        h("li", null, "Safari の他のタブを閉じてから、もう一度お試しください。"),
+        h("li", null, "ホーム画面に追加した版（GitHub Pages 版）の方が使えるメモリに余裕があります。"),
+        h("li", null, "iPhone の撮影を 1080p/30fps にすると、動画が 4K の約3分の1の大きさになり安定します。")),
+      h("p", { class: "small muted", style: "margin:0" }, `記録: 段階=${pk.stage}${pk.type ? " / 形式=" + pk.type : ""}${gb ? " / " + gb : ""}`),
+      h("pre", { class: "small", style: "white-space:pre-wrap;margin:0;font-family:ui-monospace,Menlo,monospace" }, pk.log || ""),
+      h("div", null, h("button", { class: "btn sm", onclick: () => copyText(`段階=${pk.stage}\n` + (pk.log || "")) }, "この記録をコピー")),
+      h("div", null, h("button", { class: "btn sm", onclick: e => e.target.closest(".notice").remove() }, "閉じる"))));
+  }
+
+  wrap.append(h("div", { class: "row" },
+    h("label", { class: "field grow" }, "試合", select("t_match", ms.map(x => [x.id, mLabel(x)]), m.id)),
+  ));
+  wrap.querySelector("#t_match").addEventListener("change", e => { setMatch(+e.target.value); render(); });
+
+  const grid = h("div", { class: "tagging" });
+  const left = h("div", { class: "stack" });
+  const side = h("div", { class: "side" });
+  grid.append(left, side);
+  wrap.append(grid);
+
+  /* --- 動画 */
+  let url = videoURLs.get(m.id);
+  if (!url && S.videoKeys.has(m.id)) {
+    try { const rec = await DB.get("videos", m.id); if (rec?.blob) { url = URL.createObjectURL(rec.blob); videoURLs.set(m.id, url); } } catch { }
+  }
+  const box = h("div", { class: "player-box" });
+  left.append(box);
+  let video = null;
+  if (!url) {
+    box.append(h("div", { class: "picker" },
+      h("div", { style: "font-size:1.1rem;font-weight:700" }, "試合動画を選択してください"),
+      m.videoName ? h("div", { class: "small" }, `前回の動画: ${m.videoName}`) : null,
+      fileButton("動画を選ぶ（写真／ファイル）", "video/*,.mp4,.mov,.m4v", "", f => useVideoFile(m, f), "t_video",
+        () => { if (lastDiag() !== "open") diag("open", { matchId: m.id }); }, () => diag("cancel")),
+      h("div", { class: "small", style: "opacity:.85;max-width:52ch" }, "「写真ライブラリ」から試合動画を選んでください。長い動画は準備に少し時間がかかります。動画は iPad 内で再生するだけで、どこにも送信されません。")));
+  } else {
+    video = h("video", { src: url, controls: true, playsinline: true, preload: "metadata" });
+    diag("player");
+    video.setAttribute("playsinline", ""); video.setAttribute("webkit-playsinline", "");
+    box.append(video);
+  }
+
+  /* --- 操作バー */
+  const tc = h("span", { class: "timecode" }, "00:00.0");
+  const seek = t => { if (video && isFinite(t)) video.currentTime = Math.max(0, Math.min(t, video.duration || t)); };
+  const fps = m.fps || 30;
+  const ctrl = (label, fn, title) => h("button", { class: "btn sm", onclick: fn, title, disabled: !video }, label);
+  const playBtn = ctrl("▶ 再生", () => video.paused ? video.play() : video.pause());
+  const rate = select("t_rate", [[0.25, "0.25x"], [0.5, "0.5x"], [1, "1x"], [1.5, "1.5x"], [2, "2x"]], 1);
+  rate.style.width = "auto"; rate.style.minHeight = "36px";
+  rate.addEventListener("change", () => { if (video) video.playbackRate = +rate.value; });
+  left.append(h("div", { class: "scoreboard" }, tc,
+    ctrl("−10秒", () => seek(video.currentTime - 10)), ctrl("−5秒", () => seek(video.currentTime - 5)),
+    ctrl("◀ 1コマ", () => { video.pause(); seek(video.currentTime - 1 / fps); }), playBtn,
+    ctrl("1コマ ▶", () => { video.pause(); seek(video.currentTime + 1 / fps); }),
+    ctrl("+5秒", () => seek(video.currentTime + 5)), ctrl("+10秒", () => seek(video.currentTime + 10)), rate));
+
+  /* --- タイムライン */
+  const tl = h("div", { class: "timeline", title: "タップでその位置へ。マーカー＝タグ" });
+  left.append(tl);
+  const matchTags = () => S.tags.filter(t => t.matchId === m.id && t.status !== "rejected").sort((a, b) => a.time - b.time);
+  function drawTL() {
+    tl.replaceChildren();
+    const d = video?.duration || m.duration;
+    if (!d) return;
+    for (const t of matchTags()) {
+      const mk = h("div", { class: "mk" + (t.teamId !== m.teamId ? " opp" : "") + (state.selTag === t.id ? " sel" : ""), title: `${fmt(t.time)} ${t.eventType} ${pLabel(player(t.playerId))}` });
+      mk.style.left = (t.time / d * 100) + "%";
+      tl.append(mk);
+    }
+    tl.append(h("div", { class: "ph", id: "ph" }));
+    updPH();
+  }
+  function updPH() {
+    if (!video) return;
+    const ph = tl.querySelector(".ph"); const d = video.duration;
+    if (ph && d) ph.style.left = (video.currentTime / d * 100) + "%";
+    tc.textContent = fmt(video.currentTime) + (d ? " / " + fmt(d) : "");
+  }
+  const tlSeek = e => { const r = tl.getBoundingClientRect(); const d = video?.duration; if (d) seek((e.clientX - r.left) / r.width * d); };
+  tl.addEventListener("pointerdown", e => { tlSeek(e); tl.setPointerCapture(e.pointerId); });
+  tl.addEventListener("pointermove", e => { if (e.buttons) tlSeek(e); });
+
+  /* --- イベントボタン */
+  const evNames = S.eventTypes.filter(e => e.active !== false).map(e => e.name);
+  left.append(h("div", { class: "events" }, evNames.map((name, i) => h("button", {
+    class: "evbtn", disabled: !video, onclick: () => addTag(name),
+  }, name, i < 9 ? h("kbd", null, i + 1) : null))));
+
+  async function addTag(eventType, time) {
+    if (!video && time == null) return;
+    const t = { matchId: m.id, time: Math.round((time ?? video.currentTime) * 100) / 100, quarter: tagCtx.quarter, eventType,
+      teamId: tagCtx.teamId, playerId: tagCtx.playerId, result: null, memo: "", source: "manual", status: "confirmed", createdAt: now(), updatedAt: now() };
+    tagCtx.lastTagId = await DB.put("tags", t);
+    S.tags = await DB.all("tags");
+    toast(`${fmt(t.time)} ${eventType}${t.playerId ? " " + pLabel(player(t.playerId)) : ""}`);
+    drawTL(); drawSide(true); drawList();
+  }
+
+  /* --- 右パネル: 対象選択と直前のタグ */
+  function drawSide(flash) {
+    const teams = [m.teamId, m.oppId];
+    const roster = playersOf(tagCtx.teamId, true);
+    const last = S.tags.find(t => t.id === tagCtx.lastTagId);
+    side.replaceChildren(
+      h("div", { class: "panel stack" },
+        h("span", { class: "label" }, "チーム"),
+        h("div", { class: "seg" }, teams.map(id => h("button", { class: tagCtx.teamId === id ? "on" : "", onclick: () => { tagCtx.teamId = id; tagCtx.playerId = null; drawSide(); } }, team(id)?.name ?? "?"))),
+        h("span", { class: "label" }, "選手"),
+        h("div", { class: "roster" },
+          h("button", { class: "shirt none" + (tagCtx.playerId == null ? " on" : ""), onclick: () => { tagCtx.playerId = null; drawSide(); } }, h("span", { class: "no" }, "選手なし")),
+          roster.map(p => h("button", { class: "shirt" + (tagCtx.playerId === p.id ? " on" : ""), onclick: () => { tagCtx.playerId = p.id; drawSide(); } },
+            h("span", { class: "no" }, p.number ?? "–"), h("span", { class: "nm" }, p.name)))),
+        roster.length ? null : h("p", { class: "small muted" }, "選手が未登録です（チーム単位で記録されます）"),
+        h("span", { class: "label" }, "クォーター"),
+        h("div", { class: "seg" }, [1, 2, 3, 4].map(q => h("button", { class: tagCtx.quarter === q ? "on" : "", onclick: () => { tagCtx.quarter = q; drawSide(); } }, "Q" + q)))),
+      last ? h("div", { class: "panel stack lasttag" + (flash ? " flash" : "") },
+        h("div", { class: "row spread" }, h("span", { class: "label" }, "直前のタグ"), h("span", { class: "num", style: "font-size:1.15rem;font-weight:700" }, fmt(last.time))),
+        h("div", { style: "font-weight:700" }, `${last.eventType} ・ ${team(last.teamId)?.name ?? ""} ・ ${player(last.playerId) ? pLabel(player(last.playerId)) : "選手なし"}`),
+        eventResults(last.eventType).length ? h("div", { class: "chips" }, eventResults(last.eventType).map(r => h("button", {
+          class: "chip" + (last.result === r ? " on" : ""), onclick: async () => {
+            await DB.put("tags", { ...last, result: last.result === r ? null : r, updatedAt: now() }); S.tags = await DB.all("tags"); drawSide(); drawList();
+          },
+        }, r))) : h("p", { class: "small muted" }, "このイベントには結果の選択肢がありません"),
+        h("div", { class: "row" },
+          h("button", { class: "btn sm danger", onclick: async () => { await DB.del("tags", last.id); tagCtx.lastTagId = null; S.tags = await DB.all("tags"); toast("取り消しました"); drawTL(); drawSide(); drawList(); } }, "取り消し"),
+          h("button", { class: "btn sm", onclick: () => { tagCtx.lastTagId = null; drawSide(); } }, "完了"))) : null,
+      h("div", { class: "panel stack small" },
+        h("span", { class: "label" }, "再生設定"),
+        h("label", { class: "field" }, "タグへ移動するとき何秒前から再生するか",
+          select("t_lead", [[0, "0秒"], [2, "2秒"], [3, "3秒"], [5, "5秒"], [8, "8秒"], [10, "10秒"]], state.lead)),
+        h("label", { class: "check" }, h("input", { type: "checkbox", id: "t_auto", checked: state.autoplay }), "移動後に自動再生"),
+        video ? fileButton("別の動画を選ぶ", "video/*,.mp4,.mov,.m4v", "sm", f => useVideoFile(m, f), "t_video2") : null,
+        S.videoKeys.has(m.id)
+          ? h("button", { class: "btn sm", onclick: async () => { await DB.del("videos", m.id); S.videoKeys.delete(m.id); toast("iPad内の動画を削除しました（タグは残ります）"); drawSide(); } }, "iPad内に保存した動画を削除")
+          : video ? h("button", { class: "btn sm", onclick: () => storeVideo(m) }, "この動画を iPad 内に保存（次回選択不要）") : null),
+    );
+    side.querySelector("#t_lead").addEventListener("change", e => { state.lead = +e.target.value; prefs.set("lead", state.lead); });
+    side.querySelector("#t_auto").addEventListener("change", e => { state.autoplay = e.target.checked; prefs.set("autoplay", state.autoplay); });
+  }
+
+  /* --- タグ一覧 */
+  const listBox = h("div", { class: "stack" });
+  wrap.append(listBox);
+  function drawList() {
+    const rows = matchTags();
+    listBox.replaceChildren(
+      h("div", { class: "row spread" }, h("h3", null, `タグ一覧（${rows.length}件）`),
+        h("button", { class: "btn sm", onclick: () => editTag(null) }, "＋ 時刻を指定して追加")),
+      h("p", { class: "small muted", style: "margin:0" }, "行をタップするとその場面へ移動します（設定した秒数だけ前から再生）。もう一度タップで編集。"),
+      table([
+        { t: "動画時刻", f: t => h("span", { class: "num", style: "font-size:1.05rem" }, fmt(t.time)) },
+        { t: "Q", f: t => t.quarter ? "Q" + t.quarter : "—" }, { t: "イベント", k: "eventType" }, { t: "結果", f: t => t.result || "" },
+        { t: "チーム", f: t => team(t.teamId)?.name ?? "" }, { t: "選手", f: t => pLabel(player(t.playerId)) },
+        { t: "メモ", f: t => t.memo || "" },
+        { t: "状態", f: t => t.status === "confirmed" ? (t.source === "ai" ? h("span", { class: "pill ok" }, "AI→確定") : "") : h("span", { class: "pill ai" }, STATUS_LABEL[t.status]) },
+      ], rows, {
+        maxH: "420px", empty: "まだタグがありません。動画を再生して、イベントボタンをタップしてください。",
+        selected: t => t.id === state.selTag,
+        onRow: t => {
+          if (state.selTag === t.id) return editTag(t);
+          state.selTag = t.id;
+          if (video) { seek(t.time - state.lead); if (state.autoplay) video.play().catch(() => { }); }
+          drawTL(); drawList();
+        },
+      }));
+  }
+
+  function editTag(t) {
+    const isNew = !t;
+    t = t || { matchId: m.id, time: video ? video.currentTime : 0, quarter: tagCtx.quarter, eventType: evNames[0], teamId: tagCtx.teamId, playerId: tagCtx.playerId, result: null, memo: "", source: "manual", status: "confirmed" };
+    const pls = [m.teamId, m.oppId].flatMap(id => playersOf(id).map(p => [p.id, `${pLabel(p)}（${team(id).name}）`]));
+    const allEv = [...new Set([...evNames, t.eventType])];
+    const allRes = [...new Set([...S.eventTypes.flatMap(e => eventResults(e.name)), ...(t.result ? [t.result] : [])])];
+    const body = h("div", { class: "grid-form" },
+      field("動画時刻（分:秒）", h("input", { type: "text", id: "e_time", value: fmt(t.time), inputmode: "decimal" })),
+      video ? h("div", { style: "display:flex;align-items:flex-end" }, h("button", { class: "btn", style: "width:100%", onclick: () => { document.getElementById("e_time").value = fmt(video.currentTime); } }, "現在の再生位置にする")) : null,
+      field("イベント", select("e_ev", allEv.map(x => [x, x]), t.eventType)),
+      field("結果", select("e_res", [["", "（なし）"], ...allRes.map(x => [x, x])], t.result || "")),
+      field("クォーター", select("e_q", [["", "—"], [1, "Q1"], [2, "Q2"], [3, "Q3"], [4, "Q4"]], t.quarter ?? "")),
+      field("チーム", select("e_team", [[m.teamId, team(m.teamId)?.name], [m.oppId, team(m.oppId)?.name]], t.teamId)),
+      field("選手", select("e_pl", [["", "（選手なし）"], ...pls], t.playerId ?? "")),
+      field("状態", select("e_st", Object.entries(STATUS_LABEL), t.status)),
+      field("メモ", h("input", { type: "text", id: "e_memo", value: t.memo || "" })),
+      t.source === "ai" ? h("p", { class: "small muted" }, "AIが作成したタグです。内容を確認・修正して「確定」にしてください。") : null);
+    const val = id => document.getElementById(id).value;
+    dialog(isNew ? "タグを追加" : "タグを編集", body, [
+      isNew ? null : { label: "削除", cls: "danger", value: "del", check: async () => {
+        await DB.del("tags", t.id); state.selTag = null; S.tags = await DB.all("tags"); drawTL(); drawList(); drawSide(); toast("削除しました"); return true;
+      } },
+      { label: "キャンセル", value: false },
+      { label: "保存", cls: "primary", value: true, check: async () => {
+        let time; try { time = parseTime(val("e_time")); } catch { toast("時刻の形式が正しくありません（例: 12:34.5）"); return false; }
+        let teamId = +val("e_team"); const pid = val("e_pl") === "" ? null : +val("e_pl");
+        if (pid && player(pid)) teamId = player(pid).teamId; // 選手の所属を優先
+        const rec = { ...t, time: Math.round(time * 100) / 100, eventType: val("e_ev"), result: val("e_res") || null, quarter: val("e_q") === "" ? null : +val("e_q"),
+          teamId, playerId: pid, status: val("e_st"), memo: val("e_memo").trim(), updatedAt: now() };
+        if (isNew) rec.createdAt = now();
+        const id = await DB.put("tags", rec);
+        if (isNew) state.selTag = id;
+        S.tags = await DB.all("tags"); drawTL(); drawList(); drawSide(); toast("保存しました"); return true;
+      } }].filter(Boolean));
+  }
+
+  /* --- 動画イベント */
+  if (video) {
+    video.addEventListener("timeupdate", updPH);
+    video.addEventListener("seeked", updPH);
+    video.addEventListener("play", () => playBtn.textContent = "⏸ 停止");
+    video.addEventListener("pause", () => playBtn.textContent = "▶ 再生");
+    video.addEventListener("loadedmetadata", async () => {
+      drawTL();
+      if (Math.abs((m.duration || 0) - video.duration) > 0.5) { await DB.put("matches", { ...m, duration: video.duration }); m = { ...m, duration: video.duration }; S.matches = await DB.all("matches"); }
+    });
+    const vs = h("div", { class: "vstatus", id: "t_vstatus" }, `動画を読み込み中…（${m.videoName || ""}${m.videoSize ? "・" + (m.videoSize / 1e6).toFixed(0) + " MB" : ""}）`);
+    box.after(vs);
+    const slow = setTimeout(() => { if (!video.duration) vs.textContent = "読み込みに時間がかかっています。長い動画や写真アプリからの動画は、iPad が変換するため数十秒かかることがあります。"; }, 8000);
+    video.addEventListener("loadedmetadata", () => { clearTimeout(slow); vs.remove(); diag("meta", { d: Math.round(video.duration), w: video.videoWidth, h: video.videoHeight }); }, { once: true });
+    video.addEventListener("error", () => {
+      clearTimeout(slow); diag("error", { code: video.error ? video.error.code : 0 });
+      const code = video.error ? video.error.code : 0;
+      vs.className = "vstatus err";
+      vs.replaceChildren(h("b", null, "動画を再生できませんでした"), h("br"),
+        code === 4 ? "この形式に対応していないか、この画面（お試し版）では端末内の動画の再生が制限されています。GitHub Pages 版（ホーム画面に追加したアプリ）でお試しください。"
+          : code === 3 ? "動画データの読み込み中に問題が起きました。別の動画でお試しください。"
+          : "動画を読み込めませんでした。もう一度選び直してください。",
+        h("span", { class: "small muted" }, `（エラーコード ${code}）`));
+    });
+  }
+  /* 外付けキーボード用ショートカット */
+  keyHandler = e => {
+    if (!video || ["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName) || document.getElementById("dlg").open) return;
+    if (e.code === "Space") { e.preventDefault(); video.paused ? video.play() : video.pause(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); seek(video.currentTime - (e.shiftKey ? 1 : 5)); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); seek(video.currentTime + (e.shiftKey ? 1 : 5)); }
+    else if (e.key === ",") { video.pause(); seek(video.currentTime - 1 / fps); }
+    else if (e.key === ".") { video.pause(); seek(video.currentTime + 1 / fps); }
+    else if (/^[1-9]$/.test(e.key) && evNames[+e.key - 1]) addTag(evNames[+e.key - 1]);
+  };
+
+  drawSide(); drawTL(); drawList();
+  if (video && state.selTag) { const t = S.tags.find(x => x.id === state.selTag); if (t) video.addEventListener("loadedmetadata", () => seek(t.time - state.lead), { once: true }); }
+  return wrap;
+};
+let keyHandler = null;
+document.addEventListener("keydown", e => { if (state.route === "tag" && keyHandler) keyHandler(e); });
+
+function fileButton(label, accept, cls, onFile, id, onOpen, onCancel) {
+  const inp = h("input", { type: "file", accept, class: "filehit", id, "aria-label": label });
+  inp.addEventListener("change", () => { const f = inp.files && inp.files[0]; inp.value = ""; if (f) onFile(f); else { diag("empty"); if (onCancel) onCancel(); } });
+  if (onOpen) { inp.addEventListener("click", onOpen); inp.addEventListener("touchend", onOpen, { passive: true }); }
+  if (onCancel) inp.addEventListener("cancel", onCancel);
+  return h("label", { class: "btn filebtn " + (cls || "") }, label, inp);
+}
+/* ---- 診断ログ（動画選択の各段階を記録。ページが落ちても次回起動時に表示できるよう、端末内2か所に保存） */
+let DIAG = [];
+const DIAG_LABEL = { start: "アプリ起動", open: "動画の選択画面を開いた", cancel: "選択をキャンセル", empty: "選択結果が空だった", file: "動画を受け取った",
+  player: "再生画面を作成", meta: "動画情報の読み込み完了", error: "再生エラー", hidden: "画面が裏に回った", visible: "画面に戻った", pagehide: "ページが閉じられた" };
+function diag(ev, data) {
+  DIAG.push({ t: Date.now(), ev, ...(data || {}) });
+  DIAG = DIAG.slice(-40);
+  try { localStorage.setItem("hai.diag", JSON.stringify(DIAG)); } catch { }
+  try { if (DB.db) DB.put("meta", { id: "diag", entries: DIAG }).catch(() => { }); } catch { }
+}
+const lastDiag = () => DIAG.length ? DIAG[DIAG.length - 1].ev : null;
+function diagText(entries) {
+  return entries.map(e => {
+    const d = new Date(e.t), ts = d.toTimeString().slice(0, 8);
+    const x = e.ev === "file" ? ` ${e.name || "?"} / ${(e.size / 1e6).toFixed(0)} MB / ${e.type || "形式不明"}`
+      : e.ev === "meta" ? ` ${e.d}秒 / ${e.w}×${e.h}` : e.ev === "error" ? ` コード${e.code}` : e.ev === "start" ? ` ${e.ua || ""}` : "";
+    return `${ts} ${DIAG_LABEL[e.ev] || e.ev}${x}`;
+  }).join("\n");
+}
+document.addEventListener("visibilitychange", () => { if (["open", "file", "player", "hidden", "visible"].includes(lastDiag())) diag(document.hidden ? "hidden" : "visible"); });
+window.addEventListener("pagehide", () => { if (["open", "file", "player", "hidden", "visible"].includes(lastDiag())) diag("pagehide"); });
+async function useVideoFile(m, f) {
+  {
+    if (f.type && !f.type.startsWith("video/") && !/\.(mp4|mov|m4v)$/i.test(f.name)) return toast("動画ファイルを選んでください");
+    diag("file", { name: f.name, size: f.size, type: f.type });
+    if (m.videoName && (m.videoName !== f.name || m.videoSize !== f.size)) toast(`前回と異なる動画です（前回: ${m.videoName}）`);
+    dropVideoURL(m.id);
+    videoURLs.set(m.id, URL.createObjectURL(f));
+    pendingFiles.set(m.id, f);
+    await DB.put("matches", { ...m, videoName: f.name, videoSize: f.size, updatedAt: now() });
+    await reload(); render();
+  }
+}
+const pendingFiles = new Map(); // matchId -> File（iPad内保存用）
+async function storeVideo(m) {
+  const f = pendingFiles.get(m.id);
+  if (!f) return toast("動画をもう一度選択してから保存してください");
+  if (f.size > 1.5e9) return toast(`動画が大きいため（${(f.size / 1e9).toFixed(1)} GB）iPad 内保存はできません。毎回「写真」から選んでください`);
+  toast("保存中…（大きな動画は時間がかかります）");
+  try {
+    try { await navigator.storage?.persist?.(); } catch { }
+    await DB.put("videos", { matchId: m.id, blob: f, name: f.name, size: f.size, savedAt: now() });
+    S.videoKeys.add(m.id); toast("iPad内に保存しました"); render();
+  } catch (e) { toast("保存できませんでした（容量不足の可能性）。動画は毎回選択してください"); }
+}
+
+/* ------------------------------------------------------------ 画面: 集計 */
+const statFilter = { matchIds: null, category: "", confirmedOnly: true, team: "" };
+views.stats = async () => {
+  const wrap = h("div", { class: "stack" }, h("h2", null, "集計"));
+  if (!S.matches.length) { wrap.append(h("div", { class: "panel empty" }, "試合が登録されていません。")); return wrap; }
+  const ms = [...S.matches].sort((a, b) => b.date.localeCompare(a.date));
+  const cats = [...new Set(ms.map(m => m.category).filter(Boolean))];
+  const pool = ms.filter(m => !statFilter.category || m.category === statFilter.category);
+  const chosen = statFilter.matchIds ? pool.filter(m => statFilter.matchIds.includes(m.id)) : pool;
+  const filt = h("div", { class: "panel stack" },
+    h("div", { class: "row" },
+      h("label", { class: "field", style: "min-width:180px" }, "カテゴリー", select("s_cat", [["", "すべて"], ...cats.map(c => [c, c])], statFilter.category)),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "s_conf", checked: statFilter.confirmedOnly }), "確定タグのみ（AI推定を除く）")),
+    h("span", { class: "label" }, "対象試合"),
+    h("div", { class: "chips" },
+      h("button", { class: "chip" + (!statFilter.matchIds ? " on" : ""), onclick: () => { statFilter.matchIds = null; render(); } }, "すべて"),
+      pool.map(m => h("button", { class: "chip" + (statFilter.matchIds?.includes(m.id) ? " on" : ""), onclick: () => {
+        const s = new Set(statFilter.matchIds || []); s.has(m.id) ? s.delete(m.id) : s.add(m.id);
+        statFilter.matchIds = s.size ? [...s] : null; render();
+      } }, `${m.date} vs ${team(m.oppId)?.name ?? "?"}`))));
+  filt.querySelector("#s_cat").addEventListener("change", e => { statFilter.category = e.target.value; statFilter.matchIds = null; render(); });
+  filt.querySelector("#s_conf").addEventListener("change", e => { statFilter.confirmedOnly = e.target.checked; render(); });
+  wrap.append(filt);
+  const rows = tagRows(chosen.map(m => m.id), statFilter.confirmedOnly);
+  wrap.append(h("p", { class: "small muted", style: "margin:0" }, `対象 ${chosen.length} 試合 ・ タグ ${rows.length} 件 ・ 得点＝シュートと PS の結果が「ゴール」のもの`));
+  const tabs = [["team", "チーム別"], ["match", "試合別"], ["player", "選手別"], ["quarter", "クォーター別"]];
+  wrap.append(h("div", { class: "tabbar" }, tabs.map(([k, l]) => h("button", { class: state.statTab === k ? "on" : "", onclick: () => { state.statTab = k; render(); } }, l))));
+  if (!rows.length) { wrap.append(h("div", { class: "panel empty" }, "対象のタグがありません。")); return wrap; }
+  let res;
+  if (state.statTab === "team") res = teamSummary(rows);
+  else if (state.statTab === "match") res = matchSummary(rows);
+  else if (state.statTab === "quarter") res = quarterSummary(rows);
+  else {
+    const teams = [...new Set(rows.map(r => r.teamName))];
+    const sel = select("s_team", [["", "すべてのチーム"], ...teams.map(t => [t, t])], statFilter.team);
+    sel.style.maxWidth = "320px";
+    sel.addEventListener("change", e => { statFilter.team = e.target.value; render(); });
+    wrap.append(sel);
+    res = playerSummary(statFilter.team ? rows.filter(r => r.teamName === statFilter.team) : rows);
+  }
+  wrap.append(table(res.cols, res.rows, { empty: "選手が設定されたタグがありません。" }));
+  return wrap;
+};
+
+/* ------------------------------------------------------------ 画面: 出力・バックアップ */
+views.export = async () => {
+  const wrap = h("div", { class: "stack" }, h("h2", null, "出力・バックアップ"));
+  const anon = prefs.get("anon", false);
+  const ids = S.matches.map(m => m.id);
+  const rows = tagRows(ids, false);
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "").replace(/^(\d{8})/, "$1_");
+  const A = cols => anon ? anonymize(cols) : cols;
+  const items = [
+    ["タグ一覧", () => [A(TAG_COLS), rows]],
+    ["試合別チーム集計", () => { const r = matchSummary(rows); return [r.cols, r.rows]; }],
+    ["選手別集計", () => { const r = playerSummary(rows); return [A(r.cols), r.rows]; }],
+    ["試合一覧", () => [[{ t: "試合日", k: "date" }, { t: "開始", k: "kickoff" }, { t: "カテゴリー", k: "category" }, { t: "大会", k: "competition" }, { t: "会場", k: "venue" },
+      { t: "自チーム", f: m => team(m.teamId)?.name }, { t: "対戦相手", f: m => team(m.oppId)?.name }, { t: "得点(自)", k: "scoreOwn" }, { t: "得点(相手)", k: "scoreOpp" }, { t: "メモ", k: "memo" }], S.matches]],
+    ["選手名簿", () => [A([{ t: "チーム", f: p => team(p.teamId)?.name }, { t: "背番号", k: "number" }, { t: "氏名", k: "name" }, { t: "ポジション", k: "position" }, { t: "在籍", f: p => p.active === false ? "" : "○" }]),
+      S.teams.flatMap(t => playersOf(t.id))]],
+  ];
+  wrap.append(h("div", { class: "panel stack" },
+    h("h3", null, "CSV 出力"),
+    h("p", { class: "small muted", style: "margin:0" }, "「保存」で共有シートが開きます。「ファイルに保存」を選ぶと iPad の「ファイル」に保存できます。Excel / Numbers で文字化けしない形式（UTF-8 BOM付き）です。"),
+    h("label", { class: "check" }, h("input", { type: "checkbox", id: "x_anon", checked: anon, onchange: e => { prefs.set("anon", e.target.checked); render(); } }), "選手名を伏せる（背番号のみ）— チーム外に渡すとき"),
+    table([{ t: "データ", k: "name" }, { t: "件数", k: "n", n: true }, { t: "", f: r => h("div", { class: "row", style: "justify-content:flex-end" },
+      h("button", { class: "btn sm primary", onclick: () => { const [c, d] = r.get(); saveFile(`${r.name}_${stamp}.csv`, toCSV(c, d), "text/csv"); } }, "保存"),
+      h("button", { class: "btn sm", onclick: () => { const [c, d] = r.get(); copyText(toCSV(c, d).slice(1)); } }, "コピー")) }],
+      items.map(([name, get]) => ({ name, get, n: get()[1].length })))));
+
+  wrap.append(h("div", { class: "panel stack" },
+    h("h3", null, "全データのバックアップ"),
+    h("p", { class: "small", style: "margin:0" }, "チーム・選手・試合・タグ・設定をまとめて 1 つのファイル（JSON）に保存します。動画は含みません。iPad の故障や機種変更に備えて、試合のたびに保存しておくと安心です。"),
+    h("div", { class: "row" },
+      h("button", { class: "btn primary", onclick: async () => saveFile(`hockey_backup_${stamp}.json`, await backupJSON(), "application/json") }, "バックアップを保存"),
+      h("button", { class: "btn", onclick: async () => copyText(await backupJSON()) }, "バックアップをコピー"),
+      h("button", { class: "btn", onclick: restore }, "バックアップから復元")),
+    h("p", { class: "small muted", style: "margin:0" }, "復元すると、この iPad の現在のデータはバックアップの内容に置き換わります。")));
+
+  wrap.append(h("div", { class: "panel stack" },
+    h("h3", null, "動作の記録（不具合の調査用）"),
+    h("p", { class: "small muted", style: "margin:0" }, "動画を選んだときの動きを記録しています。うまく動かないときは「コピー」して開発者に送ってください。選手名などのデータは含みません。"),
+    h("pre", { class: "small", style: "white-space:pre-wrap;margin:0;max-height:220px;overflow:auto;font-family:ui-monospace,Menlo,monospace" }, diagText(DIAG.slice(-25)) || "記録はまだありません"),
+    h("div", null, h("button", { class: "btn sm", onclick: () => copyText(diagText(DIAG)) }, "記録をコピー"))));
+  wrap.append(h("div", { class: "panel stack" },
+    h("h3", null, "全データの削除"),
+    h("p", { class: "small muted", style: "margin:0" }, "この iPad に保存されたすべてのデータ（保存した動画を含む）を削除します。"),
+    h("div", null, h("button", { class: "btn danger", onclick: async () => {
+      if (!(await confirmDlg("全データを削除", "チーム・選手・試合・タグ・保存した動画をすべて削除します。元に戻せません。先にバックアップを保存しましたか？", "すべて削除"))) return;
+      await DB.bulk(STORES.map(s => [s, "clear"])); await seedEvents(); videoURLs.forEach((u, k) => dropVideoURL(k));
+      await reload(); toast("削除しました"); location.hash = "#home"; render();
+    } }, "全データを削除"))));
+  return wrap;
+};
+
+async function backupJSON() {
+  const data = { app: "hockey-ai-analyzer", version: 1, exportedAt: now() };
+  for (const s of ["teams", "players", "matches", "eventTypes", "tags", "aiTracks"]) data[s] = await DB.all(s);
+  return JSON.stringify(data);
+}
+function restore() {
+  const ta = h("textarea", { id: "r_text", placeholder: "コピーしたバックアップをここに貼り付け" });
+  dialog("バックアップから復元", h("div", { class: "stack" },
+    fileButton("ファイルを選んで復元", ".json,application/json", "primary", async f => { document.getElementById("dlg").close(); restoreText(await f.text()); }, "r_file"),
+    h("p", { class: "small muted", style: "margin:0" }, "または、「バックアップをコピー」で控えた内容を貼り付け:"), ta),
+    [{ label: "キャンセル", value: false }, { label: "貼り付けた内容で復元", cls: "primary", value: true, check: async () => {
+      const txt = document.getElementById("r_text").value.trim();
+      if (!txt) { toast("貼り付けてください"); return false; }
+      setTimeout(() => restoreText(txt), 0); return true;
+    } }]);
+}
+async function restoreText(txt) {
+  {
+    let data;
+    try { data = JSON.parse(txt); if (data.app !== "hockey-ai-analyzer") throw 0; } catch { return toast("バックアップの形式ではありません"); }
+    const n = (data.tags || []).length;
+    if (!(await confirmDlg("バックアップから復元", `${data.exportedAt?.slice(0, 16).replace("T", " ")} のバックアップ（試合 ${(data.matches || []).length}・タグ ${n}）で置き換えます。`, "復元する"))) return;
+    const ops = [];
+    for (const s of ["teams", "players", "matches", "eventTypes", "tags", "aiTracks"]) { ops.push([s, "clear"]); for (const v of data[s] || []) ops.push([s, "put", v]); }
+    await DB.bulk(ops); await reload(); toast("復元しました"); location.hash = "#home"; render();
+  }
+}
+
+/* ------------------------------------------------------------ 画面: イベント設定 */
+views.events = async () => {
+  const wrap = h("div", { class: "stack" }, h("h2", null, "イベント設定"),
+    h("p", { class: "small muted", style: "margin:0" }, "タグ付け画面のボタンです。上から順に表示され、先頭 9 個は外付けキーボードの 1〜9 でも入力できます。名前を変えても既存タグのイベント名は変わりません。"));
+  const list = S.eventTypes;
+  const move = async (i, d) => {
+    const a = list[i], b = list[i + d]; if (!b) return;
+    await DB.bulk([["eventTypes", "put", { ...a, order: b.order }], ["eventTypes", "put", { ...b, order: a.order }]]); await reload(); render();
+  };
+  wrap.append(table([
+    { t: "順", f: (e) => h("div", { class: "row" }, h("button", { class: "btn sm", onclick: ev => { ev.stopPropagation(); move(list.indexOf(e), -1); } }, "↑"), h("button", { class: "btn sm", onclick: ev => { ev.stopPropagation(); move(list.indexOf(e), 1); } }, "↓")) },
+    { t: "イベント名", k: "name" }, { t: "結果の選択肢", f: e => e.results || "—" }, { t: "使用", f: e => e.active === false ? "停止中" : "○" },
+  ], list, { onRow: e => eventDialog(e) }));
+  wrap.append(h("div", null, h("button", { class: "btn primary", onclick: () => eventDialog() }, "＋ イベントを追加")));
+  return wrap;
+};
+function eventDialog(e) {
+  e = e || {};
+  const body = h("div", { class: "grid-form" },
+    field("イベント名 *", h("input", { type: "text", id: "ev_name", value: e.name || "" })),
+    field("結果の選択肢（カンマ区切り）", h("input", { type: "text", id: "ev_res", value: e.results || "", placeholder: "成功,失敗" })),
+    h("label", { class: "check" }, h("input", { type: "checkbox", id: "ev_act", checked: e.active !== false }), "ボタンを表示する"));
+  dialog(e.id ? "イベントの編集" : "イベントを追加", body, [
+    e.id ? { label: "削除", cls: "danger", value: "del", check: async () => { await DB.del("eventTypes", e.id); await reload(); render(); return true; } } : null,
+    { label: "キャンセル", value: false },
+    { label: "保存", cls: "primary", value: true, check: async () => {
+      const name = document.getElementById("ev_name").value.trim();
+      if (!name) { toast("イベント名を入力してください"); return false; }
+      if (S.eventTypes.some(x => x.name === name && x.id !== e.id)) { toast("同じ名前のイベントがあります"); return false; }
+      await DB.put("eventTypes", { ...e, name, results: document.getElementById("ev_res").value.replace(/、/g, ",").split(",").map(s => s.trim()).filter(Boolean).join(","),
+        active: document.getElementById("ev_act").checked, order: e.order ?? (Math.max(0, ...S.eventTypes.map(x => x.order)) + 10) });
+      await reload(); render(); return true;
+    } }].filter(Boolean));
+}
+
+/* ------------------------------------------------------------ 初期データ・サンプル */
+async function seedEvents() {
+  if ((await DB.all("eventTypes")).length) return;
+  await DB.bulk(DEFAULT_EVENTS.map(([name, results], i) => ["eventTypes", "put", { name, results, order: (i + 1) * 10, active: true }]));
+}
+async function loadSample() {
+  const own = await DB.put("teams", { name: "（例）桜ホッケークラブ", own: true, color: "#1b5aa6", memo: "サンプル", createdAt: now() });
+  const opp = await DB.put("teams", { name: "（例）青葉HC", own: false, color: "#d0612a", memo: "サンプル", createdAt: now() });
+  const ps = [[1, "高橋 大輝", "GK"], [3, "鈴木 翔", "DF"], [5, "伊藤 蓮", "DF"], [7, "佐藤 健", "MF"], [8, "中村 陽", "MF"], [10, "山田 太郎", "FW"], [11, "小林 湊", "FW"]];
+  await DB.bulk([...ps.map(([n, name, pos]) => ["players", "put", { teamId: own, number: n, name, position: pos, active: true, memo: "", createdAt: now() }]),
+    ["players", "put", { teamId: opp, number: 9, name: "田中 一郎", position: "FW", active: true, memo: "", createdAt: now() }]]);
+  const today = new Date().toISOString().slice(0, 10);
+  const mid = await DB.put("matches", { date: today, kickoff: "10:00", category: "高校男子", teamId: own, oppId: opp, competition: "（例）練習試合", venue: "", scoreOwn: 2, scoreOpp: 1, memo: "サンプル", createdAt: now() });
+  await reload();
+  const pid = n => S.players.find(p => p.teamId === own && p.number === n)?.id;
+  const T = (time, q, ev, tm, pl, res) => ["tags", "put", { matchId: mid, time, quarter: q, eventType: ev, teamId: tm, playerId: pl, result: res || null, memo: "", source: "manual", status: "confirmed", createdAt: now(), updatedAt: now() }];
+  await DB.bulk([T(95, 1, "サークル侵入", own, pid(10), "シュートあり"), T(97, 1, "シュート", own, pid(10), "ゴール"), T(240, 1, "ボール奪取", own, pid(7)),
+    T(410, 2, "PC", opp, S.players.find(p => p.teamId === opp)?.id, "シュートあり"), T(612, 2, "シュート", own, pid(11), "枠外"), T(790, 3, "ボール奪取", own, pid(3)),
+    T(905, 3, "シュート", own, pid(8), "ゴール"), T(1100, 4, "ボールロスト", own, pid(7))]);
+  setMatch(mid); await reload(); toast("サンプルデータを追加しました"); render();
+}
+
+/* ------------------------------------------------------------ AI（第2段階の接続口） */
+/* AI 推定結果は必ず source:"ai", status:"estimated" で保存し、コーチが確認して confirmed にする。
+   iPad 上での推論（WebGPU + ONNX Runtime Web）またはクラウドGPU（選手名は送らず、動画フレームのみ）を想定。 */
+const HockeyAI = {
+  capabilities() { return { webgpu: !!navigator.gpu, wasm: typeof WebAssembly === "object" }; },
+  async importEstimatedTags(matchId, items) { // items: [{time, eventType, teamId, playerId, conf}]
+    await DB.bulk(items.map(it => ["tags", "put", { matchId, time: it.time, eventType: it.eventType, teamId: it.teamId ?? null, playerId: it.playerId ?? null,
+      quarter: it.quarter ?? null, result: null, memo: it.conf != null ? `AI信頼度 ${Math.round(it.conf * 100)}%` : "", source: "ai", status: "estimated", createdAt: now(), updatedAt: now() }]));
+    await reload();
+  },
+};
+window.HockeyAI = HockeyAI;
+
+/* ------------------------------------------------------------ ルーター */
+async function render() {
+  const r = (location.hash || "#home").slice(1);
+  state.route = views[r] ? r : "home";
+  document.querySelectorAll("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.r === state.route));
+  const view = document.getElementById("view");
+  try {
+    for (const v of view.querySelectorAll("video")) { try { v.pause(); v.removeAttribute("src"); v.load(); } catch { } }
+    const el = await views[state.route]();
+    view.replaceChildren(el);
+  } catch (e) {
+    console.error(e);
+    view.replaceChildren(h("div", { class: "panel" }, h("h3", null, "表示できませんでした"), h("p", { class: "small" }, String(e && e.message || e))));
+  }
+}
+let lastRoute = null;
+window.addEventListener("hashchange", () => { const r = (location.hash || "#home").slice(1); if (r !== lastRoute) { lastRoute = r; window.scrollTo(0, 0); render(); } });
+
+(async function start() {
+  try {
+    await DB.open();
+    await seedEvents();
+    await reload();
+    try { if (navigator.storage?.persist && !(await navigator.storage.persisted())) navigator.storage.persist(); } catch { }
+  } catch (e) {
+    document.getElementById("view").replaceChildren(h("div", { class: "panel stack" }, h("h3", null, "データを保存できない状態です"),
+      h("p", null, "プライベートブラウズを使っている場合は通常のタブで開いてください。Safari の設定で「すべての Cookie をブロック」がオンだと保存できません。"),
+      h("p", { class: "small muted" }, String(e && e.message || e))));
+    return;
+  }
+  try { DIAG = JSON.parse(localStorage.getItem("hai.diag") || "[]"); } catch { DIAG = []; }
+  try { const rec = await DB.get("meta", "diag"); if (rec && rec.entries && (!DIAG.length || rec.entries[rec.entries.length - 1].t > DIAG[DIAG.length - 1].t)) DIAG = rec.entries; } catch { }
+  // 前回の起動以降に「選択画面を開いた」が記録され、その後に完了・キャンセル・エラーが無い → 途中で落ちた
+  const lastStart = DIAG.map(e => e.ev).lastIndexOf("start");
+  const session = DIAG.slice(lastStart + 1);
+  const openIdx = session.map(e => e.ev).lastIndexOf("open");
+  if (openIdx >= 0 && Date.now() - session[openIdx].t < 30 * 60 * 1000 && !session.slice(openIdx).some(e => ["meta", "cancel", "error", "empty"].includes(e.ev))) {
+    const tail = session.slice(openIdx);
+    const file = tail.find(e => e.ev === "file");
+    state.reloadWarn = { stage: file ? (tail.some(e => e.ev === "player") ? "player" : "received") : "open", name: file?.name, size: file?.size, type: file?.type, log: diagText(session) };
+    if (match(session[openIdx].matchId)) setMatch(session[openIdx].matchId);
+    try { history.replaceState(null, "", "#tag"); } catch { location.hash = "#tag"; }
+  }
+  diag("start", { ua: (navigator.userAgent.match(/OS [\d_]+/) || [""])[0].replace(/_/g, ".") });
+  lastRoute = (location.hash || "#home").slice(1);
+  render();
+})();
+</script>
+<script>
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>
