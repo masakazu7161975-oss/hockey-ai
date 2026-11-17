@@ -199,6 +199,13 @@ dialog::backdrop { background: rgba(10, 20, 35, .45); }
 @media (max-width: 980px) {
   .tagging { grid-template-columns: minmax(0, 1fr); }
 }
+/* ライブ解析: 記録ボタンを映像の横に固定（iPad 縦向きでも横並び） */
+@media (min-width: 700px) {
+  .tagging.live-grid { grid-template-columns: minmax(0, 1fr) 290px; }
+  .live-side { position: sticky; top: calc(60px + env(safe-area-inset-top, 0px)); max-height: calc(100vh - 70px); overflow-y: auto; }
+}
+.live-side .evbtn { min-height: 50px; font-size: .88rem; }
+.lv-sum { cursor: pointer; font-weight: 700; min-height: 36px; display: flex; align-items: center; }
 @media (max-width: 520px) {
   .timecode { font-size: 1.35rem; }
   .brand { font-size: 1.1rem; }

@@ -256,7 +256,7 @@ views.live = async () => {
   wrap.querySelector("#lv_match").addEventListener("change", e => { stopLive(); setMatch(+e.target.value); live.q = null; render(); });
   wrap.querySelector("#lv_src").addEventListener("change", e => { prefs.set("lvSrc", e.target.value); stopLive(); render(); });
 
-  const grid = h("div", { class: "tagging" }), left = h("div", { class: "stack" }), side = h("div", { class: "side" });
+  const grid = h("div", { class: "tagging live-grid" }), left = h("div", { class: "stack" }), side = h("div", { class: "side live-side" });
   grid.append(left, side); wrap.append(grid);
 
   /* 映像とオーバーレイ */
@@ -291,19 +291,23 @@ views.live = async () => {
 
   /* 手順パネル */
   let mode = null; // "corners" | "colors"
-  const steps = h("div", { class: "panel stack" });
-  side.append(steps);
+  // 試合前の設定は映像の下に置き、済んだら折りたたむ（ライブ中は記録ボタンを映像の横に常に表示）
+  const stepsBody = h("div", { class: "stack" });
+  const ready = () => cfg.corners.length === 4 && ["own", "opp"].every(k => cfg.samples.some(s => s.cat === k));
+  const steps = h("details", { class: "panel", open: !ready() }, h("summary", { class: "lv-sum" }, "試合前の設定（四隅・色・攻撃方向）"), stepsBody);
+  left.append(steps);
+  const showStage = () => { try { window.scrollTo(0, Math.max(0, stage.getBoundingClientRect().top + window.scrollY - 70)); } catch { } };
   function drawSteps() {
     const c = cfg.corners.length === 4, cs = ["own", "opp"].every(k => cfg.samples.some(s => s.cat === k));
-    steps.replaceChildren(
-      h("span", { class: "label" }, "試合前の設定"),
+    steps.querySelector("summary").textContent = "試合前の設定（四隅・色・攻撃方向）" + (c && cs ? " ✓ 設定済み" : " ⚠ 未設定");
+    stepsBody.replaceChildren(
       h("div", null, h("b", null, "① ピッチの四隅"), " ", c ? h("span", { class: "pill ok" }, "設定済み") : h("span", { class: "pill warn" }, "未設定")),
       h("div", { class: "small muted" }, "映像の上で 左奥 → 右奥 → 右手前 → 左手前 の順にタップ。"),
-      h("button", { class: "btn sm" + (mode === "corners" ? " primary" : ""), onclick: () => { mode = "corners"; cfg.corners = []; saveCfg(); drawSteps(); drawOverlay(); } }, mode === "corners" ? `四隅をタップ中（${cfg.corners.length}/4）` : "四隅を設定する"),
+      h("button", { class: "btn sm" + (mode === "corners" ? " primary" : ""), onclick: () => { mode = "corners"; cfg.corners = []; saveCfg(); drawSteps(); drawOverlay(); showStage(); } }, mode === "corners" ? `四隅をタップ中（${cfg.corners.length}/4）` : "四隅を設定する"),
       h("div", null, h("b", null, "② ユニフォームの色"), " ", cs ? h("span", { class: "pill ok" }, `登録 ${cfg.samples.length}人`) : h("span", { class: "pill warn" }, "未登録")),
       h("div", { class: "small muted" }, "「色を登録」を押すと人に枠が出ます。枠をタップして、自チーム・相手・除外（審判・PB・GK）を各1人以上登録。"),
       h("div", { class: "row" },
-        h("button", { class: "btn sm" + (mode === "colors" ? " primary" : ""), onclick: async () => { mode = "colors"; drawSteps(); await detectOnce(); } }, mode === "colors" ? "枠をタップして登録中" : "色を登録"),
+        h("button", { class: "btn sm" + (mode === "colors" ? " primary" : ""), onclick: async () => { mode = "colors"; drawSteps(); showStage(); await detectOnce(); } }, mode === "colors" ? "枠をタップして登録中" : "色を登録"),
         cfg.samples.length ? h("button", { class: "btn sm ghost", onclick: () => { cfg.samples = []; saveCfg(); drawSteps(); drawOverlay(); } }, "色をリセット") : null),
       h("div", null, h("b", null, "③ 自チームの攻撃方向（前半）")),
       h("div", { class: "seg" }, [["left", "← 左のゴール"], ["right", "右のゴール →"]].map(([v, l]) => h("button", { class: cfg.ownAttack === v ? "on" : "", onclick: () => { cfg.ownAttack = v; saveCfg(); drawSteps(); } }, l))),
