@@ -235,6 +235,67 @@ function updateZones(dets, t) {
   }
 }
 
+
+/* ---------- 2台連携（カメラ役 ⇄ ベンチ役） ----------
+   中継: ntfy.sh（アカウント不要の公開中継）。送るのは集計の数字と Q 開始・終了の合図だけで、
+   ペアリングコードから作った鍵で暗号化してから送る（中継サービスでも中身は読めない）。映像・選手名は送らない。 */
+const relay = { es: null, code: "", topic: "", key: null, lastRecv: 0, lastSent: 0, pending: null, timer: 0, state: "未接続", onMsg: null, role: "" };
+const relayBase = () => prefs.get("relayBase", "https://ntfy.sh");
+const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+function newPairCode() {
+  const r = crypto.getRandomValues(new Uint8Array(10));
+  const c = [...r].map(v => CODE_CHARS[v % CODE_CHARS.length]).join("");
+  return c.slice(0, 4) + "-" + c.slice(4, 8) + "-" + c.slice(8);
+}
+const normCode = c => (c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const b64 = u8 => btoa(String.fromCharCode(...u8));
+const unb64 = s => Uint8Array.from(atob(s), ch => ch.charCodeAt(0));
+async function sha(text) { return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))); }
+async function relayOpen(code, role, onMsg) {
+  relayClose();
+  const c = normCode(code);
+  if (c.length < 8) return;
+  relay.code = c; relay.role = role; relay.onMsg = onMsg;
+  const hx = [...await sha("hai-topic:" + c)].map(b => b.toString(16).padStart(2, "0")).join("");
+  relay.topic = "hai_" + hx.slice(0, 28);
+  relay.key = await crypto.subtle.importKey("raw", await sha("hai-key:" + c), "AES-GCM", false, ["encrypt", "decrypt"]);
+  relay.state = "接続中…";
+  const es = new EventSource(`${relayBase()}/${relay.topic}/sse?since=3m`);
+  relay.es = es;
+  es.onopen = () => { relay.state = "接続済み"; };
+  es.onerror = () => { relay.state = "再接続中…（電波を確認してください）"; };
+  es.onmessage = async e => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (d.event !== "message" || !d.message) return;
+    try {
+      const [iv, ct] = d.message.split(".").map(unb64);
+      const obj = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, relay.key, ct)));
+      if (obj.r === relay.role) return;                 // 自分の送信は無視
+      if (Date.now() - obj.ts > 5 * 60 * 1000) return;  // 古い情報は無視
+      relay.lastRecv = Date.now(); relay.state = "接続済み";
+      relay.onMsg && relay.onMsg(obj);
+    } catch { /* 別のコードのメッセージ */ }
+  };
+}
+function relayClose() { if (relay.es) relay.es.close(); relay.es = null; relay.key = null; clearTimeout(relay.timer); relay.pending = null; relay.state = "未接続"; }
+// 送信は最新のものだけを、最短 minGap 秒おきに送る（中継の回数制限対策）
+function relaySend(obj, minGap = 5) {
+  if (!relay.key) return;
+  relay.pending = { ...obj, r: relay.role, ts: Date.now() };
+  const wait = Math.max(0, relay.lastSent + minGap * 1000 - Date.now());
+  clearTimeout(relay.timer);
+  relay.timer = setTimeout(async () => {
+    const o = relay.pending; relay.pending = null; if (!o || !relay.key) return;
+    relay.lastSent = Date.now();
+    try {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, relay.key, new TextEncoder().encode(JSON.stringify({ ...o, ts: Date.now() }))));
+      await fetch(`${relayBase()}/${relay.topic}`, { method: "POST", body: b64(iv) + "." + b64(ct) });
+    } catch { relay.state = "送信できません（電波を確認してください）"; }
+  }, wait);
+}
+const ago = t => t ? Math.round((Date.now() - t) / 1000) + "秒前" : "まだ受信なし";
+
 /* ---------- 画面 */
 views.live = async () => {
   const cfg = liveCfg();
@@ -252,9 +313,13 @@ views.live = async () => {
     h("div", { class: "row spread" }, h("h2", null, "ライブ解析（試作）"), h("span", { class: "pill ai" }, "AI の数は推定値です")),
     h("div", { class: "row" },
       h("label", { class: "field grow" }, "試合", select("lv_match", ms.map(x => [x.id, mLabel(x)]), m.id)),
-      h("label", { class: "field" }, "映像", select("lv_src", [["camera", "カメラ（ライブ）"], ["file", "録画した動画で試す"]], prefs.get("lvSrc", "camera")))));
+      h("label", { class: "field" }, "この端末の役割", select("lv_role", [["solo", "1台で使う"], ["camera", "カメラ役（観客席）"], ["bench", "ベンチ役（記録・確認）"]], prefs.get("lvRole", "solo"))),
+      prefs.get("lvRole", "solo") === "bench" ? null : h("label", { class: "field" }, "映像", select("lv_src", [["camera", "カメラ（ライブ）"], ["file", "録画した動画で試す"]], prefs.get("lvSrc", "camera")))));
+  const role = prefs.get("lvRole", "solo");
+  wrap.querySelector("#lv_role").addEventListener("change", e => { prefs.set("lvRole", e.target.value); stopLive(); relayClose(); render(); });
+  if (role === "bench") return benchView(wrap, m, ownName, oppName);
   wrap.querySelector("#lv_match").addEventListener("change", e => { stopLive(); setMatch(+e.target.value); live.q = null; render(); });
-  wrap.querySelector("#lv_src").addEventListener("change", e => { prefs.set("lvSrc", e.target.value); stopLive(); render(); });
+  wrap.querySelector("#lv_src")?.addEventListener("change", e => { prefs.set("lvSrc", e.target.value); stopLive(); render(); });
 
   const grid = h("div", { class: "tagging live-grid" }), left = h("div", { class: "stack" }), side = h("div", { class: "side live-side" });
   grid.append(left, side); wrap.append(grid);
@@ -319,6 +384,7 @@ views.live = async () => {
   side.append(ctl);
   function drawCtl() {
     const q = live.q;
+    if (role === "camera") return drawCamPanel();
     const tbtn = (team, label, fn) => h("button", { class: "evbtn" + (team === "opp" ? " opp" : ""), disabled: !q.running, onclick: fn }, label);
     const add = (team, key, ev, res) => async () => { q.counts[team][key]++; await logTag(team, ev, res, false); toast(`${team === "own" ? ownName : oppName}: ${key}`); drawCtl(); drawBoard(); };
     ctl.replaceChildren(
@@ -344,6 +410,57 @@ views.live = async () => {
           tbtn(t, "ゴール", add(t, "ゴール", "シュート", "ゴール")),
           tbtn(t, "PC", add(t, "PC", "PC", null)),
           tbtn(t, "PS", add(t, "PS", "PS", null))))));
+  }
+
+  /* カメラ役の右パネル */
+  function startQ(n) {
+    if (n && n !== live.q.n) { live.q = newQuarter(n); live.q.matchId = m.id; }
+    const q = live.q; if (q.running) return;
+    if (!video.videoWidth) { say("ベンチから開始の合図が来ましたが、映像が開始されていません。「カメラを開始」を押してください。"); live.wantStart = true; drawCtl(); return; }
+    q.running = true; q.t0 = performance.now(); q.lastTick = q.t0; live.wantStart = false; drawCtl(); runLoop();
+  }
+  async function stopQ() { const q = live.q; live.wantStart = false; if (!q.running) return drawCtl(); q.elapsed = qTime(); q.running = false; await saveQuarter(); sendAI(true); drawCtl(); }
+  function sendAI(now) {
+    if (role !== "camera") return;
+    const q = live.q;
+    relaySend({ ty: "ai", q: q.n, run: q.running, ready: !!live.sess, ms: live.ms, backend: live.backend, n: live.dets.filter(d => d.onPitch).length,
+      c: { own: { z23: q.counts.own["23m侵入"], cir: q.counts.own["サークル侵入"] }, opp: { z23: q.counts.opp["23m侵入"], cir: q.counts.opp["サークル侵入"] } },
+      terr: q.terr, t: Math.round(qTime()) }, now ? 1 : 5);
+  }
+  function drawCamPanel() {
+    const q = live.q, code = prefs.get("lvCode", "");
+    const inp = h("input", { type: "text", id: "lv_code", value: code, placeholder: "ベンチ役に表示されたコード", autocapitalize: "characters", autocomplete: "off" });
+    ctl.replaceChildren(
+      h("span", { class: "label" }, "カメラ役"),
+      h("div", { class: "small" }, "ベンチ役のスマホに表示されたペアリングコードを入力してください。Q の開始・終了はベンチから操作します。"),
+      field("ペアリングコード", inp),
+      h("button", { class: "btn primary", onclick: () => { prefs.set("lvCode", inp.value.trim()); connect(true); drawCtl(); } }, "ベンチとつなぐ"),
+      h("div", { class: "small", id: "lv_link" }, linkText()),
+      h("div", { class: "row spread" }, h("b", null, `Q${q.n}`), h("span", { class: "timecode", id: "lv_clock" }, fmt(qTime()).slice(0, -2))),
+      h("div", null, q.running ? h("span", { class: "pill ok" }, "AI 解析中") : live.wantStart ? h("span", { class: "pill warn" }, "カメラを開始してください") : h("span", { class: "pill" }, "待機中（ベンチの開始待ち）")),
+      h("details", { class: "small" }, h("summary", null, "ベンチとつながらないとき"),
+        h("div", { class: "row", style: "margin-top:6px" },
+          h("button", { class: "btn sm", disabled: q.running, onclick: () => startQ() }, "この端末で Q を開始"),
+          h("button", { class: "btn sm", disabled: !q.running, onclick: () => stopQ() }, "この端末で Q を終了"))));
+  }
+  const linkText = () => relay.key ? `連携: ${relay.state} ・ ベンチから受信: ${ago(relay.lastRecv)}` : "連携: 未接続";
+  const onCtl = obj => {
+    if (obj.ty !== "ctl") return;
+    if (obj.run) startQ(obj.q);
+    else if (live.q.running && live.q.n === obj.q) stopQ();
+    else if (!live.q.running && obj.q !== live.q.n) { live.q = newQuarter(obj.q); live.q.matchId = m.id; drawCtl(); drawBoard(); }
+    sendAI(true);
+  };
+  // 画面を描き直しても接続は保ったまま、受信先だけ新しい画面に付け替える
+  function connect(force) {
+    if (role !== "camera") return;
+    const c = normCode(prefs.get("lvCode", ""));
+    if (!force && relay.key && relay.code === c && relay.role === "cam") { relay.onMsg = onCtl; return; }
+    relayOpen(c, "cam", onCtl);
+  }
+  if (role === "camera" && prefs.get("lvCode", "")) connect();
+  if (role === "camera") {
+    const hb = setInterval(() => { if (!document.body.contains(video)) return clearInterval(hb); const l = document.getElementById("lv_link"); if (l) l.textContent = linkText(); if (!live.q.running) sendAI(); }, 10000);
   }
 
   /* その場の数字 */
@@ -436,6 +553,7 @@ views.live = async () => {
         live.dets = annotate(await detect(full, sz[0], sz[1]));
         updateZones(live.dets, qTime());
         tickPossession();
+        sendAI();
         drawOverlay(); drawBoard();
         say(`解析中 ・ ${live.backend === "webgpu" ? "GPU" : "CPU"} ・ 1回 ${live.ms}ms ・ 検出 ${live.dets.filter(d => d.onPitch).length}人`);
       }
@@ -448,8 +566,89 @@ views.live = async () => {
   window.__viewCleanup = () => { live.loopId++; if (live.q) { tickPossession(); if (live.q.running) { live.q.elapsed = qTime(); live.q.running = false; } } };
   drawSteps(); drawCtl(); drawBoard();
   if (live.stream || video.src) drawOverlay();
+  if (role === "camera" && live.wantStart) video.addEventListener("loadedmetadata", () => { if (live.wantStart) startQ(); }, { once: true });
   return wrap;
 };
+
+
+/* ---------- ベンチ役の画面（映像なし。記録ボタンと集計、カメラ役からの AI の数を表示） */
+function benchView(wrap, m, ownName, oppName) {
+  let code = prefs.get("lvBenchCode", "");
+  if (!code) { code = newPairCode(); prefs.set("lvBenchCode", code); }
+  const grid = h("div", { class: "tagging live-grid bench-grid" }), left = h("div", { class: "stack" }), side = h("div", { class: "side live-side" });
+  grid.append(left, side); wrap.append(grid);
+  const linkBox = h("div", { class: "small", id: "lv_link" });
+  const camInfo = h("div", { class: "small muted", id: "lv_caminfo" });
+  left.append(h("div", { class: "panel stack" },
+    h("span", { class: "label" }, "ペアリングコード（カメラ役の端末に入力）"),
+    h("div", { class: "num", id: "lv_paircode", style: "font-size:2.2rem;font-weight:700;letter-spacing:.08em" }, code),
+    h("div", { class: "row" },
+      h("button", { class: "btn sm", onclick: () => copyText(code) }, "コピー"),
+      h("button", { class: "btn sm ghost", onclick: async () => { if (!(await confirmDlg("コードを作り直す", "新しいコードにすると、カメラ役の端末にも新しいコードの入力が必要です。", "作り直す"))) return; prefs.set("lvBenchCode", newPairCode()); relayClose(); render(); } }, "コードを作り直す")),
+    linkBox, camInfo,
+    h("p", { class: "small muted", style: "margin:0" }, "送受信するのは集計の数字と Q 開始・終了の合図だけです（暗号化して送信）。映像や選手名は送りません。")));
+  const board = h("div", { class: "panel" });
+  left.append(board);
+  const ctl = h("div", { class: "panel stack" });
+  side.append(ctl);
+  let cam = null;
+  const drawBoard = () => board.replaceChildren(summaryTable(live.q, ownName, oppName, true));
+  const drawLink = () => {
+    linkBox.textContent = `連携: ${relay.state} ・ カメラから受信: ${ago(relay.lastRecv)}`;
+    camInfo.textContent = cam ? `カメラ: ${cam.ready ? "AI 準備完了" : "AI 未起動"}${cam.ms ? ` ・ 1回 ${cam.ms}ms` : ""} ・ 検出 ${cam.n ?? "-"}人 ・ ${cam.run ? `Q${cam.q} 解析中` : "待機中"}` : "カメラ役の端末からの情報を待っています";
+  };
+  const sendCtl = now => relaySend({ ty: "ctl", q: live.q.n, run: live.q.running }, now ? 1 : 5);
+  const onAI = obj => {
+    if (obj.ty !== "ai") return;
+    cam = obj;
+    if (obj.q === live.q.n) {
+      const C = live.q.counts;
+      C.own["23m侵入"] = obj.c.own.z23; C.own["サークル侵入"] = obj.c.own.cir; C.opp["23m侵入"] = obj.c.opp.z23; C.opp["サークル侵入"] = obj.c.opp.cir;
+      live.q.terr = obj.terr;
+    }
+    drawLink(); drawBoard();
+  };
+  if (relay.key && relay.code === normCode(code) && relay.role === "bench") relay.onMsg = onAI; else relayOpen(code, "bench", onAI);
+  function drawCtl() {
+    const q = live.q;
+    const tbtn = (t, label, fn) => h("button", { class: "evbtn" + (t === "opp" ? " opp" : ""), disabled: !q.running, onclick: fn }, label);
+    const add = (t, key, ev, res) => async () => { q.counts[t][key]++; await logTag(t, ev, res, false); toast(`${t === "own" ? ownName : oppName}: ${key}`); drawCtl(); drawBoard(); };
+    ctl.replaceChildren(
+      h("div", { class: "row spread" },
+        h("div", { class: "seg" }, [1, 2, 3, 4].map(n => h("button", { class: q.n === n ? "on" : "", disabled: q.running, onclick: () => { live.q = newQuarter(n); live.q.matchId = m.id; sendCtl(true); drawCtl(); drawBoard(); } }, "Q" + n))),
+        h("span", { class: "timecode", id: "lv_clock" }, fmt(qTime()).slice(0, -2))),
+      q.running
+        ? h("button", { class: "btn danger", onclick: async () => {
+          tickPossession(); q.elapsed = qTime(); q.running = false; sendCtl(true); drawCtl();
+          toast("カメラから最終の数字を受け取っています…");
+          await new Promise(r => setTimeout(r, 4000));
+          await saveQuarter(); drawBoard(); showSummary(m);
+        } }, `Q${q.n} 終了 → 集計を表示`)
+        : h("button", { class: "btn primary", onclick: () => { q.running = true; q.t0 = performance.now(); q.lastTick = q.t0; sendCtl(true); drawCtl(); } }, `Q${q.n} 開始（カメラの AI も開始）`),
+      h("span", { class: "label" }, "ボール保持（入れ替わったらタップ）"),
+      h("div", { class: "seg" },
+        h("button", { class: q.holder === "own" ? "on" : "", onclick: () => { tickPossession(); q.holder = "own"; drawCtl(); } }, ownName),
+        h("button", { class: q.holder === "opp" ? "on" : "", onclick: () => { tickPossession(); q.holder = "opp"; drawCtl(); } }, oppName),
+        h("button", { class: !q.holder ? "on" : "", onclick: () => { tickPossession(); q.holder = null; drawCtl(); } }, "止まっている")),
+      ...[["own", ownName], ["opp", oppName]].map(([t, name]) => h("div", { class: "stack", style: "gap:6px" },
+        h("span", { class: "label" }, name),
+        h("div", { class: "events", style: "grid-template-columns:repeat(3,1fr)" },
+          tbtn(t, "シュート枠内", add(t, "シュート枠内", "シュート", "枠内(セーブ)")),
+          tbtn(t, "シュート枠外", add(t, "シュート枠外", "シュート", "枠外")),
+          tbtn(t, "ゴール", add(t, "ゴール", "シュート", "ゴール")),
+          tbtn(t, "PC", add(t, "PC", "PC", null)),
+          tbtn(t, "PS", add(t, "PS", "PS", null))))));
+  }
+  const tick = setInterval(() => {
+    if (!document.body.contains(ctl)) { clearInterval(tick); return; }
+    tickPossession(); drawLink();
+    const c = document.getElementById("lv_clock"); if (c) c.textContent = fmt(qTime()).slice(0, -2);
+  }, 1000);
+  const hb = setInterval(() => { if (!document.body.contains(ctl)) return clearInterval(hb); sendCtl(); }, 20000);
+  window.__viewCleanup = () => { clearInterval(tick); clearInterval(hb); tickPossession(); };
+  drawCtl(); drawBoard(); drawLink(); setTimeout(() => sendCtl(true), 1500);
+  return wrap;
+}
 
 function stopLive() {
   live.loopId++;
