@@ -1,5 +1,5 @@
 // オフライン用キャッシュ（アプリ本体のみ。データ・動画はキャッシュしない）
-const CACHE = "hockey-ai-49819414";
+const CACHE = "hockey-ai-90847809";
 const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener("activate", e => {

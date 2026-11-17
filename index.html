@@ -844,6 +844,13 @@ views.tag = async () => {
           select("t_lead", [[0, "0秒"], [2, "2秒"], [3, "3秒"], [5, "5秒"], [8, "8秒"], [10, "10秒"]], state.lead)),
         h("label", { class: "check" }, h("input", { type: "checkbox", id: "t_auto", checked: state.autoplay }), "移動後に自動再生"),
         video ? fileButton("別の動画を選ぶ", "video/*", "sm", f => useVideoFile(m, f), "t_video2") : null,
+        video ? h("button", { class: "btn sm danger", onclick: async () => {
+          if (!(await confirmDlg("動画を外す", "この試合から動画を外します。付けたタグは消えません。写真アプリの動画も消えません。", "外す"))) return;
+          dropVideoURL(m.id); pendingFiles.delete(m.id);
+          const ops = [["matches", "put", { ...m, videoName: null, videoSize: null, duration: null, updatedAt: now() }]];
+          if (S.videoKeys.has(m.id)) ops.push(["videos", "delete", m.id]);
+          await DB.bulk(ops); await reload(); toast("動画を外しました"); render();
+        } }, "この試合から動画を外す") : null,
         S.videoKeys.has(m.id)
           ? h("button", { class: "btn sm", onclick: async () => { await DB.del("videos", m.id); S.videoKeys.delete(m.id); toast("iPad内の動画を削除しました（タグは残ります）"); drawSide(); } }, "iPad内に保存した動画を削除")
           : video ? h("button", { class: "btn sm", onclick: () => storeVideo(m) }, "この動画を iPad 内に保存（次回選択不要）") : null),
