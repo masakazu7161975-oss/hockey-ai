@@ -1,5 +1,5 @@
 // オフライン用キャッシュ（アプリ本体のみ。データ・動画はキャッシュしない）
-const CACHE = "hockey-ai-1a8ef70b4a";
+const CACHE = "hockey-ai-5b587938c6";
 const FILES = ["./", "./index.html", "./live.js", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 const BIG = "hockey-ai-models-v1"; // AI モデル等の大きなファイルは別キャッシュ（毎回ダウンロードしない）
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });

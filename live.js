@@ -211,15 +211,14 @@ async function saveQuarter() {
   await DB.put("meta", rec);
 }
 // ゾーン侵入: 1秒以上いたら「侵入」1回、3秒以上いなくなったら終了
-function updateZones(dets, t) {
-  const q = live.q;
+function updateZones(dets, t, q = live.q, onEntry = (team, k) => logTag(team, k, null, true)) {
   for (const team of ["own", "opp"]) {
     const gx = attackGoal(team, q.n);
     for (const zone of ["23", "circle"]) {
       const present = dets.some(d => d.cat === team && d.onPitch && d.fx != null && inZone(d.fx, d.fy, gx, zone));
       const st = q.zone[team][zone];
       if (!st.active) {
-        if (present) { st.since ??= t; if (t - st.since >= 1) { st.active = true; st.gone = null; const k = zone === "23" ? "23m侵入" : "サークル侵入"; q.counts[team][k]++; logTag(team, k, null, true); } }
+        if (present) { st.since ??= t; if (t - st.since >= 1) { st.active = true; st.gone = null; const k = zone === "23" ? "23m侵入" : "サークル侵入"; q.counts[team][k]++; onEntry(team, k, st.since); } }
         else st.since = null;
       } else if (!present) { st.gone ??= t; if (t - st.gone >= 3) { st.active = false; st.since = null; } }
       else st.gone = null;
@@ -227,7 +226,7 @@ function updateZones(dets, t) {
   }
   // 陣地: 選手の平均位置が相手陣側にあるチームに時間を加算
   const xs = dets.filter(d => (d.cat === "own" || d.cat === "opp") && d.onPitch && d.fx != null).map(d => d.fx);
-  const dt = Math.min(1, t - (live.lastT || t)); live.lastT = t;
+  const dt = Math.min(5, t - (q._lastT ?? t)); q._lastT = t;
   if (xs.length >= 4 && dt > 0) {
     const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
     const ownTowards = attackGoal("own", q.n) > PITCH.L / 2 ? mx > PITCH.L / 2 : mx < PITCH.L / 2;
@@ -296,6 +295,113 @@ function relaySend(obj, minGap = 5) {
 }
 const ago = t => t ? Math.round((Date.now() - t) / 1000) + "秒前" : "まだ受信なし";
 
+/* ---------- 設定（四隅・色・攻撃方向）と映像上の表示。ライブ解析と「解析」画面の両方で使う */
+function makeSetup({ video, stage, ov, say, ownName, oppName, title }) {
+  const cfg = liveCfg();
+  /* 手順パネル */
+  let mode = null; // "corners" | "colors"
+  // 試合前の設定は映像の下に置き、済んだら折りたたむ（ライブ中は記録ボタンを映像の横に常に表示）
+  const stepsBody = h("div", { class: "stack" });
+  const ready = () => cfg.corners.length === 4 && ["own", "opp"].every(k => cfg.samples.some(s => s.cat === k));
+  const steps = h("details", { class: "panel", open: !ready() }, h("summary", { class: "lv-sum" }, title), stepsBody);
+  const showStage = () => { try { window.scrollTo(0, Math.max(0, stage.getBoundingClientRect().top + window.scrollY - 70)); } catch { } };
+  function drawSteps() {
+    ov.style.pointerEvents = mode ? "auto" : "none";
+    const c = cfg.corners.length === 4, cs = ["own", "opp"].every(k => cfg.samples.some(s => s.cat === k));
+    steps.querySelector("summary").textContent = title + (c && cs ? " ✓ 設定済み" : " ⚠ 未設定");
+    stepsBody.replaceChildren(
+      h("div", null, h("b", null, "① ピッチの四隅"), " ", c ? h("span", { class: "pill ok" }, "設定済み") : h("span", { class: "pill warn" }, "未設定")),
+      h("div", { class: "small muted" }, "映像の上で 左奥 → 右奥 → 右手前 → 左手前 の順にタップ。"),
+      h("button", { class: "btn sm" + (mode === "corners" ? " primary" : ""), onclick: () => { mode = "corners"; cfg.corners = []; saveCfg(); drawSteps(); drawOverlay(); showStage(); } }, mode === "corners" ? `四隅をタップ中（${cfg.corners.length}/4）` : "四隅を設定する"),
+      h("div", null, h("b", null, "② ユニフォームの色"), " ", cs ? h("span", { class: "pill ok" }, `登録 ${cfg.samples.length}人`) : h("span", { class: "pill warn" }, "未登録")),
+      h("div", { class: "small muted" }, "「色を登録」を押すと人に枠が出ます。枠をタップして、自チーム・相手・除外（審判・PB・GK）を各1人以上登録。"),
+      h("div", { class: "row" },
+        h("button", { class: "btn sm" + (mode === "colors" ? " primary" : ""), onclick: async () => { mode = "colors"; drawSteps(); showStage(); await detectOnce(); } }, mode === "colors" ? "枠をタップして登録中" : "色を登録"),
+        cfg.samples.length ? h("button", { class: "btn sm ghost", onclick: () => { cfg.samples = []; saveCfg(); drawSteps(); drawOverlay(); } }, "色をリセット") : null),
+      h("div", null, h("b", null, "③ 自チームの攻撃方向（前半）")),
+      h("div", { class: "seg" }, [["left", "← 左のゴール"], ["right", "右のゴール →"]].map(([v, l]) => h("button", { class: cfg.ownAttack === v ? "on" : "", onclick: () => { cfg.ownAttack = v; saveCfg(); drawSteps(); } }, l))),
+      h("div", { class: "small muted" }, "後半（Q3・Q4）は自動で逆向きにします。"));
+  }
+
+  /* オーバーレイ描画 */
+  function drawOverlay() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw) return;
+    ov.width = vw; ov.height = vh;
+    const g = ov.getContext("2d"); g.clearRect(0, 0, vw, vh);
+    const lw = Math.max(2, vw / 640);
+    const c = cfg.corners;
+    if (c.length) {
+      g.strokeStyle = "#f2c230"; g.lineWidth = lw * 1.5; g.beginPath();
+      c.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]));
+      if (c.length === 4) g.closePath(); g.stroke();
+      c.forEach((p, i) => { g.fillStyle = "#f2c230"; g.beginPath(); g.arc(p[0], p[1], lw * 5, 0, 7); g.fill(); g.fillStyle = "#000"; g.font = `${lw * 9}px sans-serif`; g.fillText(String(i + 1), p[0] - lw * 3, p[1] + lw * 3); });
+      const Hi = invHomography();
+      if (Hi) { // 23m ラインとサークルを描いて、合わせ具合を確認できるように
+        g.strokeStyle = "rgba(242,194,48,.9)"; g.lineWidth = lw;
+        const line = pts => { g.beginPath(); pts.forEach(([x, y], i) => { const [u, v] = applyH(Hi, x, y); i ? g.lineTo(u, v) : g.moveTo(u, v); }); g.stroke(); };
+        for (const x of [PITCH.D23, PITCH.L - PITCH.D23, PITCH.L / 2]) line([[x, 0], [x, PITCH.W]]);
+        for (const gx of [0, PITCH.L]) {
+          const pts = [], dir = gx === 0 ? 1 : -1, cy = PITCH.W / 2;
+          for (let a = -90; a <= 0; a += 6) pts.push([gx + dir * PITCH.R * Math.cos(a * Math.PI / 180), cy - PITCH.POST + PITCH.R * Math.sin(a * Math.PI / 180)]);
+          for (let a = 0; a <= 90; a += 6) pts.push([gx + dir * PITCH.R * Math.cos(a * Math.PI / 180), cy + PITCH.POST + PITCH.R * Math.sin(a * Math.PI / 180)]);
+          line(pts);
+        }
+      }
+    }
+    const col = { own: "#3b82f6", opp: "#e7854f", ex: "#9aa5b1" };
+    for (const d of live.dets) {
+      if (!d.onPitch) continue;
+      g.strokeStyle = col[d.cat] || "#ffffff"; g.lineWidth = lw * (d.cat ? 1.6 : 1);
+      g.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+    }
+  }
+  function toVideoXY(e) {
+    const r = ov.getBoundingClientRect(), vw = video.videoWidth, vh = video.videoHeight;
+    // object-fit: contain の余白を考慮
+    const s = Math.min(r.width / vw, r.height / vh), dw = vw * s, dh = vh * s, ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
+    return [(e.clientX - r.left - ox) / s, (e.clientY - r.top - oy) / s];
+  }
+  ov.addEventListener("pointerdown", async e => {
+    if (!video.videoWidth) return;
+    const [x, y] = toVideoXY(e);
+    if (mode === "corners") {
+      cfg.corners.push([x, y]); saveCfg();
+      if (cfg.corners.length === 4) { mode = null; toast("四隅を設定しました。黄色の線がピッチのラインに重なるか確認してください"); }
+      drawSteps(); drawOverlay();
+    } else if (mode === "colors") {
+      const d = live.dets.find(d => x >= d.x1 && x <= d.x2 && y >= d.y1 && y <= d.y2);
+      if (!d || !d.lab) return toast("人の枠の中をタップしてください");
+      const cat = await dialog("この人は？", h("p", null, "ユニフォームの色を登録します。審判・PB・GK・ベンチの人は「除外」にしてください。"),
+        [{ label: "キャンセル", value: null }, { label: "除外", value: "ex" }, { label: oppName, value: "opp" }, { label: ownName, cls: "primary", value: "own" }]);
+      if (!cat) return;
+      cfg.samples.push({ cat, lab: d.lab }); saveCfg();
+      annotate(live.dets); drawSteps(); drawOverlay();
+      toast(`${CAT[cat]}として登録しました`);
+    }
+  });
+
+  async function grab() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw) return null;
+    if (full.width !== vw) { full.width = vw; full.height = vh; }
+    fullx.drawImage(video, 0, 0, vw, vh);
+    return [vw, vh];
+  }
+  async function detectOnce() {
+    if (!video.videoWidth) return toast("先にカメラ（または動画）を開始してください");
+    try {
+      await loadModel(say);
+      const sz = await grab(); if (!sz) return;
+      live.dets = annotate(await detect(full, sz[0], sz[1]));
+      say(`AI: ${live.backend === "webgpu" ? "GPU" : "CPU"} で動作 ・ 1回 ${live.ms}ms ・ ${live.dets.filter(d => d.onPitch).length}人を検出`);
+      drawOverlay();
+    } catch (e) { say("AI を起動できませんでした: " + (e.message || e)); }
+  }
+  video.addEventListener("loadedmetadata", drawOverlay);
+  return { steps, drawSteps, drawOverlay, grab, detectOnce };
+}
+
 /* ---------- 画面 */
 views.live = async () => {
   const cfg = liveCfg();
@@ -354,30 +460,9 @@ views.live = async () => {
   }
   if (live.stream) { video.srcObject = live.stream; video.play().catch(() => { }); }
 
-  /* 手順パネル */
-  let mode = null; // "corners" | "colors"
-  // 試合前の設定は映像の下に置き、済んだら折りたたむ（ライブ中は記録ボタンを映像の横に常に表示）
-  const stepsBody = h("div", { class: "stack" });
-  const ready = () => cfg.corners.length === 4 && ["own", "opp"].every(k => cfg.samples.some(s => s.cat === k));
-  const steps = h("details", { class: "panel", open: !ready() }, h("summary", { class: "lv-sum" }, "試合前の設定（四隅・色・攻撃方向）"), stepsBody);
-  left.append(steps);
-  const showStage = () => { try { window.scrollTo(0, Math.max(0, stage.getBoundingClientRect().top + window.scrollY - 70)); } catch { } };
-  function drawSteps() {
-    const c = cfg.corners.length === 4, cs = ["own", "opp"].every(k => cfg.samples.some(s => s.cat === k));
-    steps.querySelector("summary").textContent = "試合前の設定（四隅・色・攻撃方向）" + (c && cs ? " ✓ 設定済み" : " ⚠ 未設定");
-    stepsBody.replaceChildren(
-      h("div", null, h("b", null, "① ピッチの四隅"), " ", c ? h("span", { class: "pill ok" }, "設定済み") : h("span", { class: "pill warn" }, "未設定")),
-      h("div", { class: "small muted" }, "映像の上で 左奥 → 右奥 → 右手前 → 左手前 の順にタップ。"),
-      h("button", { class: "btn sm" + (mode === "corners" ? " primary" : ""), onclick: () => { mode = "corners"; cfg.corners = []; saveCfg(); drawSteps(); drawOverlay(); showStage(); } }, mode === "corners" ? `四隅をタップ中（${cfg.corners.length}/4）` : "四隅を設定する"),
-      h("div", null, h("b", null, "② ユニフォームの色"), " ", cs ? h("span", { class: "pill ok" }, `登録 ${cfg.samples.length}人`) : h("span", { class: "pill warn" }, "未登録")),
-      h("div", { class: "small muted" }, "「色を登録」を押すと人に枠が出ます。枠をタップして、自チーム・相手・除外（審判・PB・GK）を各1人以上登録。"),
-      h("div", { class: "row" },
-        h("button", { class: "btn sm" + (mode === "colors" ? " primary" : ""), onclick: async () => { mode = "colors"; drawSteps(); showStage(); await detectOnce(); } }, mode === "colors" ? "枠をタップして登録中" : "色を登録"),
-        cfg.samples.length ? h("button", { class: "btn sm ghost", onclick: () => { cfg.samples = []; saveCfg(); drawSteps(); drawOverlay(); } }, "色をリセット") : null),
-      h("div", null, h("b", null, "③ 自チームの攻撃方向（前半）")),
-      h("div", { class: "seg" }, [["left", "← 左のゴール"], ["right", "右のゴール →"]].map(([v, l]) => h("button", { class: cfg.ownAttack === v ? "on" : "", onclick: () => { cfg.ownAttack = v; saveCfg(); drawSteps(); } }, l))),
-      h("div", { class: "small muted" }, "後半（Q3・Q4）は自動で逆向きにします。"));
-  }
+  const setup = makeSetup({ video, stage, ov, say, ownName, oppName, title: "試合前の設定（四隅・色・攻撃方向）" });
+  const { drawSteps, drawOverlay, grab, detectOnce } = setup;
+  left.append(setup.steps);
 
   /* クォーター操作と手入力 */
   const ctl = h("div", { class: "panel stack" });
@@ -468,85 +553,10 @@ views.live = async () => {
   left.append(board);
   function drawBoard() { board.replaceChildren(summaryTable(live.q, ownName, oppName, true)); }
 
-  /* オーバーレイ描画 */
-  function drawOverlay() {
-    const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw) return;
-    ov.width = vw; ov.height = vh;
-    const g = ov.getContext("2d"); g.clearRect(0, 0, vw, vh);
-    const lw = Math.max(2, vw / 640);
-    const c = cfg.corners;
-    if (c.length) {
-      g.strokeStyle = "#f2c230"; g.lineWidth = lw * 1.5; g.beginPath();
-      c.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]));
-      if (c.length === 4) g.closePath(); g.stroke();
-      c.forEach((p, i) => { g.fillStyle = "#f2c230"; g.beginPath(); g.arc(p[0], p[1], lw * 5, 0, 7); g.fill(); g.fillStyle = "#000"; g.font = `${lw * 9}px sans-serif`; g.fillText(String(i + 1), p[0] - lw * 3, p[1] + lw * 3); });
-      const Hi = invHomography();
-      if (Hi) { // 23m ラインとサークルを描いて、合わせ具合を確認できるように
-        g.strokeStyle = "rgba(242,194,48,.9)"; g.lineWidth = lw;
-        const line = pts => { g.beginPath(); pts.forEach(([x, y], i) => { const [u, v] = applyH(Hi, x, y); i ? g.lineTo(u, v) : g.moveTo(u, v); }); g.stroke(); };
-        for (const x of [PITCH.D23, PITCH.L - PITCH.D23, PITCH.L / 2]) line([[x, 0], [x, PITCH.W]]);
-        for (const gx of [0, PITCH.L]) {
-          const pts = [], dir = gx === 0 ? 1 : -1, cy = PITCH.W / 2;
-          for (let a = -90; a <= 0; a += 6) pts.push([gx + dir * PITCH.R * Math.cos(a * Math.PI / 180), cy - PITCH.POST + PITCH.R * Math.sin(a * Math.PI / 180)]);
-          for (let a = 0; a <= 90; a += 6) pts.push([gx + dir * PITCH.R * Math.cos(a * Math.PI / 180), cy + PITCH.POST + PITCH.R * Math.sin(a * Math.PI / 180)]);
-          line(pts);
-        }
-      }
-    }
-    const col = { own: "#3b82f6", opp: "#e7854f", ex: "#9aa5b1" };
-    for (const d of live.dets) {
-      if (!d.onPitch) continue;
-      g.strokeStyle = col[d.cat] || "#ffffff"; g.lineWidth = lw * (d.cat ? 1.6 : 1);
-      g.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
-    }
-  }
-  function toVideoXY(e) {
-    const r = ov.getBoundingClientRect(), vw = video.videoWidth, vh = video.videoHeight;
-    // object-fit: contain の余白を考慮
-    const s = Math.min(r.width / vw, r.height / vh), dw = vw * s, dh = vh * s, ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
-    return [(e.clientX - r.left - ox) / s, (e.clientY - r.top - oy) / s];
-  }
-  ov.addEventListener("pointerdown", async e => {
-    if (!video.videoWidth) return;
-    const [x, y] = toVideoXY(e);
-    if (mode === "corners") {
-      cfg.corners.push([x, y]); saveCfg();
-      if (cfg.corners.length === 4) { mode = null; toast("四隅を設定しました。黄色の線がピッチのラインに重なるか確認してください"); }
-      drawSteps(); drawOverlay();
-    } else if (mode === "colors") {
-      const d = live.dets.find(d => x >= d.x1 && x <= d.x2 && y >= d.y1 && y <= d.y2);
-      if (!d || !d.lab) return toast("人の枠の中をタップしてください");
-      const cat = await dialog("この人は？", h("p", null, "ユニフォームの色を登録します。審判・PB・GK・ベンチの人は「除外」にしてください。"),
-        [{ label: "キャンセル", value: null }, { label: "除外", value: "ex" }, { label: oppName, value: "opp" }, { label: ownName, cls: "primary", value: "own" }]);
-      if (!cat) return;
-      cfg.samples.push({ cat, lab: d.lab }); saveCfg();
-      annotate(live.dets); drawSteps(); drawOverlay();
-      toast(`${CAT[cat]}として登録しました`);
-    }
-  });
-
-  async function grab() {
-    const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw) return null;
-    if (full.width !== vw) { full.width = vw; full.height = vh; }
-    fullx.drawImage(video, 0, 0, vw, vh);
-    return [vw, vh];
-  }
-  async function detectOnce() {
-    if (!video.videoWidth) return toast("先にカメラ（または動画）を開始してください");
-    try {
-      await loadModel(say);
-      const sz = await grab(); if (!sz) return;
-      live.dets = annotate(await detect(full, sz[0], sz[1]));
-      say(`AI: ${live.backend === "webgpu" ? "GPU" : "CPU"} で動作 ・ 1回 ${live.ms}ms ・ ${live.dets.filter(d => d.onPitch).length}人を検出`);
-      drawOverlay();
-    } catch (e) { say("AI を起動できませんでした: " + (e.message || e)); }
-  }
   async function runLoop() {
     const id = ++live.loopId;
     try { await loadModel(say); } catch (e) { say("AI を起動できませんでした: " + (e.message || e)); return; }
-    live.lastT = 0;
+    live.q._lastT = undefined;
     while (id === live.loopId && live.q?.running && document.body.contains(video)) {
       const sz = await grab();
       if (sz) {
@@ -562,7 +572,6 @@ views.live = async () => {
     }
   }
 
-  video.addEventListener("loadedmetadata", drawOverlay);
   window.__viewCleanup = () => { live.loopId++; if (live.q) { tickPossession(); if (live.q.running) { live.q.elapsed = qTime(); live.q.running = false; } } };
   drawSteps(); drawCtl(); drawBoard();
   if (live.stream || video.src) drawOverlay();
@@ -648,6 +657,107 @@ function benchView(wrap, m, ownName, oppName) {
   window.__viewCleanup = () => { clearInterval(tick); clearInterval(hb); tickPossession(); };
   drawCtl(); drawBoard(); drawLink(); setTimeout(() => sendCtl(true), 1500);
   return wrap;
+}
+
+
+/* ---------- 録画した動画の AI 解析（「解析」画面・試合後）
+   動画を step 秒ごとに読み、23m侵入・サークル侵入の場面と陣地を求める。
+   見つけた場面は AI推定（未確認）のタグとして保存し、コーチが確認・修正する。 */
+const once = (el, ev, ms = 8000) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error(ev + " がタイムアウト")), ms); el.addEventListener(ev, () => { clearTimeout(t); res(); }, { once: true }); });
+async function analyzeVideo({ url, matchId, quarter, step = 1, say, onProgress, cancelled }) {
+  await loadModel(say);
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.preload = "auto";
+  v.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:0;pointer-events:none";
+  document.body.append(v);
+  try {
+    v.src = url;
+    await once(v, "loadedmetadata", 20000);
+    const dur = v.duration, vw = v.videoWidth, vh = v.videoHeight;
+    if (full.width !== vw) { full.width = vw; full.height = vh; }
+    const q = newQuarter(quarter); q.matchId = matchId;
+    const found = [];
+    const t0 = performance.now();
+    for (let t = 0; t < dur; t += step) {
+      if (cancelled()) return { q, found, stopped: t, dur };
+      v.currentTime = t;
+      try { await once(v, "seeked", 10000); } catch { continue; }
+      fullx.drawImage(v, 0, 0, vw, vh);
+      const dets = annotate(await detect(full, vw, vh));
+      updateZones(dets, t, q, (team, k, since) => found.push({ team, k, time: since }));
+      const done = (t + step) / dur, el = (performance.now() - t0) / 1000;
+      onProgress(Math.min(1, done), done > 0.02 ? el / done - el : null, dets);
+    }
+    return { q, found, dur };
+  } finally { v.removeAttribute("src"); v.load(); v.remove(); }
+}
+async function saveVideoAI(m, quarter, res) {
+  // 同じ試合・同じ Q の前回の動画AIタグは置き換える
+  const old = S.tags.filter(t => t.matchId === m.id && t.quarter === quarter && t.source === "ai" && t.memo === "動画AI");
+  const ops = old.map(t => ["tags", "delete", t.id]);
+  for (const f of res.found) ops.push(["tags", "put", { matchId: m.id, time: Math.round(f.time * 10) / 10, quarter, eventType: f.k, teamId: f.team === "own" ? m.teamId : m.oppId, playerId: null, result: null,
+    memo: "動画AI", source: "ai", status: "estimated", createdAt: now(), updatedAt: now() }]);
+  await DB.bulk(ops);
+  const rec = (await DB.get("meta", "video:" + m.id)) || { id: "video:" + m.id, quarters: {} };
+  rec.quarters[quarter] = { terr: res.q.terr, counts: res.q.counts, seconds: res.dur, savedAt: now() };
+  await DB.put("meta", rec);
+  S.tags = await DB.all("tags");
+  return old.length;
+}
+
+/* 「解析」画面に置く AI 解析パネル */
+function videoAIPanel({ m, video, box, getQuarter, onDone }) {
+  const ownName = team(m.teamId)?.name ?? "自チーム", oppName = team(m.oppId)?.name ?? "相手";
+  const status = h("div", { class: "small muted" });
+  const say = t => { status.textContent = t; };
+  box.classList.add("lv-stage");
+  const ov = h("canvas", { class: "lv-ov" });
+  box.append(ov);
+  const setup = makeSetup({ video, stage: box, ov, say, ownName, oppName, title: "解析の前の設定（四隅・色・攻撃方向）" });
+  const bar = h("div", { class: "aibar" }, h("div", { class: "aibar-in" }));
+  const result = h("div");
+  let running = false, cancel = false;
+  const stepSel = select("ai_step", [[0.5, "0.5秒ごと（細かい・遅い）"], [1, "1秒ごと（おすすめ）"], [2, "2秒ごと（速い）"]], prefs.get("aiStep", 1));
+  stepSel.style.width = "auto";
+  stepSel.addEventListener("change", () => prefs.set("aiStep", +stepSel.value));
+  const runBtn = h("button", { class: "btn primary" });
+  const draw = () => {
+    const q = getQuarter();
+    runBtn.textContent = running ? "解析を中止" : `Q${q} の動画として AI 解析を開始`;
+    runBtn.className = "btn " + (running ? "danger" : "primary");
+  };
+  runBtn.addEventListener("click", async () => {
+    if (running) { cancel = true; return; }
+    const cfg = liveCfg();
+    if (cfg.corners.length !== 4 || !["own", "opp"].every(k => cfg.samples.some(s => s.cat === k))) { setup.steps.open = true; return toast("先に「解析の前の設定」で四隅と色を設定してください"); }
+    const quarter = getQuarter();
+    running = true; cancel = false; draw(); video.pause();
+    bar.firstChild.style.width = "0%";
+    try {
+      const res = await analyzeVideo({ url: video.currentSrc || video.src, matchId: m.id, quarter, step: +stepSel.value, say,
+        cancelled: () => cancel,
+        onProgress: (p, eta, dets) => { bar.firstChild.style.width = (p * 100).toFixed(1) + "%"; say(`解析中 ${Math.round(p * 100)}% ・ ${live.backend === "webgpu" ? "GPU" : "CPU"} 1回 ${live.ms}ms${eta != null ? ` ・ 残り約 ${Math.ceil(eta / 60)} 分` : ""}`); live.dets = dets; setup.drawOverlay(); } });
+      if (res.stopped != null) { say(`中止しました（${fmt(res.stopped)} まで）。結果は保存していません。`); return; }
+      const replaced = await saveVideoAI(m, quarter, res);
+      bar.firstChild.style.width = "100%";
+      say(`解析が終わりました。${res.found.length} 件の場面を「AI推定」タグとして追加しました${replaced ? `（前回の ${replaced} 件は置き換え）` : ""}。`);
+      result.replaceChildren(h("div", { class: "small", style: "margin-bottom:6px" }, `Q${quarter} の AI 解析結果（推定）`), summaryTable(Object.assign(res.q, { n: quarter }), ownName, oppName, true));
+      onDone && onDone();
+    } catch (e) { say("解析できませんでした: " + (e.message || e)); }
+    finally { running = false; draw(); }
+  });
+  draw();
+  const panel = h("details", { class: "panel" },
+    h("summary", { class: "lv-sum" }, "AI 解析（この動画から 23m侵入・サークル侵入・陣地を自動で調べる）"),
+    h("div", { class: "stack", style: "margin-top:10px" },
+      h("p", { class: "small muted", style: "margin:0" }, "動画を最初から最後まで AI が見て、23m侵入とサークル侵入の場面に「AI推定」のタグを付けます。タグ一覧の行をタップするとその場面に移動するので、確認して「確定」「修正」「削除」してください。iPad の中だけで処理し、動画はどこにも送信しません。"),
+      setup.steps,
+      h("div", { class: "row" }, runBtn, stepSel),
+      bar, status, result));
+  panel.addEventListener("toggle", () => { setup.drawOverlay(); ov.hidden = !panel.open; });
+  ov.hidden = true;
+  setup.drawSteps();
+  return panel;
 }
 
 function stopLive() {
