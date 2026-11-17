@@ -743,7 +743,7 @@ views.tag = async () => {
     box.append(h("div", { class: "picker" },
       h("div", { style: "font-size:1.1rem;font-weight:700" }, "試合動画を選択してください"),
       m.videoName ? h("div", { class: "small" }, `前回の動画: ${m.videoName}`) : null,
-      fileButton("動画を選ぶ（写真／ファイル）", "video/*", "", f => useVideoFile(m, f), "t_video",
+      fileButton("動画を選ぶ（写真／ファイル）", "image/*,video/*", "", f => useVideoFile(m, f), "t_video",
         () => { if (lastDiag() !== "open") diag("open", { matchId: m.id }); }, () => { if (lastDiag() !== "empty") diag("cancel"); state.pickFail = true; render(); }),
       h("div", { class: "small", style: "opacity:.85;max-width:52ch" }, "「写真ライブラリ」から試合動画を選んでください。長い動画は準備に少し時間がかかります。動画は iPad 内で再生するだけで、どこにも送信されません。")));
   } else {
@@ -843,7 +843,7 @@ views.tag = async () => {
         h("label", { class: "field" }, "タグへ移動するとき何秒前から再生するか",
           select("t_lead", [[0, "0秒"], [2, "2秒"], [3, "3秒"], [5, "5秒"], [8, "8秒"], [10, "10秒"]], state.lead)),
         h("label", { class: "check" }, h("input", { type: "checkbox", id: "t_auto", checked: state.autoplay }), "移動後に自動再生"),
-        video ? fileButton("別の動画を選ぶ", "video/*", "sm", f => useVideoFile(m, f), "t_video2") : null,
+        video ? fileButton("別の動画を選ぶ", "image/*,video/*", "sm", f => useVideoFile(m, f), "t_video2") : null,
         video ? h("button", { class: "btn sm danger", onclick: async () => {
           if (!(await confirmDlg("動画を外す", "この試合から動画を外します。付けたタグは消えません。写真アプリの動画も消えません。", "外す"))) return;
           dropVideoURL(m.id); pendingFiles.delete(m.id);
@@ -995,7 +995,9 @@ document.addEventListener("visibilitychange", () => { if (["open", "file", "play
 window.addEventListener("pagehide", () => { if (["open", "file", "player", "hidden", "visible"].includes(lastDiag())) diag("pagehide"); });
 async function useVideoFile(m, f) {
   {
-    if (f.type && !f.type.startsWith("video/") && !/\.(mp4|mov|m4v)$/i.test(f.name)) return toast("動画ファイルを選んでください");
+    // accept を "image/*,video/*" にしているのは、iOS が写真ライブラリの動画を互換形式へ変換せず元のまま渡すようにするため。
+    // そのため写真（画像）も選べてしまうので、ここで断る。
+    if (f.type && !f.type.startsWith("video/") && !/\.(mp4|mov|m4v|hevc)$/i.test(f.name)) { diag("empty"); state.pickFail = false; return toast("写真ではなく動画を選んでください"); }
     diag("file", { name: f.name, size: f.size, type: f.type });
     if (m.videoName && (m.videoName !== f.name || m.videoSize !== f.size)) toast(`前回と異なる動画です（前回: ${m.videoName}）`);
     dropVideoURL(m.id);
